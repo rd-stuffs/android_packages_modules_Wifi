@@ -1070,16 +1070,6 @@ public class WifiManager {
     public static final String SCAN_RESULTS_AVAILABLE_ACTION = "android.net.wifi.SCAN_RESULTS";
 
     /**
-     * An access point partial scan has completed, and results are available.
-     * Call {@link #getScanResults()} to obtain the results.
-     * The broadcast intent may contain an extra field with the key {@link #EXTRA_RESULTS_UPDATED}
-     * and a {@code boolean} value indicating if the scan was successful.
-     * @hide
-     */
-    public static final String PARTIAL_SCAN_RESULTS_AVAILABLE_ACTION =
-            "com.qualcomm.qti.net.wifi.PARTIAL_SCAN_RESULTS";
-
-    /**
      * Lookup key for a {@code boolean} extra in intent {@link #SCAN_RESULTS_AVAILABLE_ACTION}
      * representing if the scan was successful or not.
      * Scans may fail for multiple reasons, these may include:
@@ -1412,7 +1402,7 @@ public class WifiManager {
             sTrafficStateCallbackMap = new SparseArray();
     private static final SparseArray<ISoftApCallback> sSoftApCallbackMap = new SparseArray();
     private static final SparseArray<IOnWifiDriverCountryCodeChangedListener>
-            sOnWifiDriverCountryCodeChangedListenerMap = new SparseArray();
+            sActiveCountryCodeChangedCallbackMap = new SparseArray();
 
     /**
      * Create a new WifiManager instance.
@@ -1726,7 +1716,7 @@ public class WifiManager {
             android.Manifest.permission.NETWORK_STACK,
             android.Manifest.permission.NETWORK_SETUP_WIZARD,
             android.Manifest.permission.NETWORK_MANAGED_PROVISIONING
-    })
+            }, conditional = true)
     @NonNull
     public AddNetworkResult addNetworkPrivileged(@NonNull WifiConfiguration config) {
         if (config == null) throw new IllegalArgumentException("config cannot be null");
@@ -2225,6 +2215,7 @@ public class WifiManager {
      * permission.
      *<p>
      * NOTE:
+     * <ul>
      * <li> These networks are just a suggestion to the platform. The platform will ultimately
      * decide on which network the device connects to. </li>
      * <li> When an app is uninstalled or disabled, all its suggested networks are discarded.
@@ -2232,7 +2223,8 @@ public class WifiManager {
      * device will disconnect from that network.</li>
      * <li> If user reset network settings, all added suggestions will be discarded. Apps can use
      * {@link #getNetworkSuggestions()} to check if their suggestions are in the device.</li>
-     * <li> In-place modification of existing suggestions are allowed.
+     * <li> In-place modification of existing suggestions are allowed.</li>
+     * <ul>
      * <li> If the provided suggestions include any previously provided suggestions by the app,
      * previous suggestions will be updated.</li>
      * <li>If one of the provided suggestions marks a previously unmetered suggestion as metered and
@@ -2241,7 +2233,16 @@ public class WifiManager {
      * and possibly reconnect back to the same suggestion. This disconnect is to make sure that any
      * traffic flowing over unmetered networks isn't accidentally continued over a metered network.
      * </li>
+     * <li>
+     * On {@link android.os.Build.VERSION_CODES#TIRAMISU} or above If one of the provided
+     * suggestions marks a previously trusted suggestion as untrusted and the device is currently
+     * connected to that suggested network, then the device will disconnect from that network. The
+     * system will immediately re-evaluate all the network candidates. This disconnect is to make
+     * sure device will not remain connected to an untrusted network without a related
+     * {@link android.net.NetworkRequest}.
      * </li>
+     * </ul>
+     * </ul>
      *
      * @param networkSuggestions List of network suggestions provided by the app.
      * @return Status code for the operation. One of the STATUS_NETWORK_SUGGESTIONS_ values.
@@ -2363,12 +2364,11 @@ public class WifiManager {
      * @throws IllegalArgumentException if no configuration is associated with the given FQDN or
      *                                  Passpoint is not enabled on the device.
      * @deprecated This will be non-functional in a future release.
+     * <br>
+     * Requires {@code android.Manifest.permission.NETWORK_SETTINGS} or
+     * {@code android.Manifest.permission.NETWORK_CARRIER_PROVISIONING}.
      */
     @Deprecated
-    @RequiresPermission(anyOf = {
-            android.Manifest.permission.NETWORK_SETTINGS,
-            android.Manifest.permission.NETWORK_CARRIER_PROVISIONING
-    })
     public void removePasspointConfiguration(String fqdn) {
         try {
             if (!mService.removePasspointConfiguration(fqdn, mContext.getOpPackageName())) {
@@ -2386,12 +2386,11 @@ public class WifiManager {
      *
      * @return A list of {@link PasspointConfiguration} added by the caller
      * @deprecated This will be non-functional in a future release.
+     * <br>
+     * Requires {@code android.Manifest.permission.NETWORK_SETTINGS} or
+     * {@code android.Manifest.permission.NETWORK_SETUP_WIZARD}.
      */
     @Deprecated
-    @RequiresPermission(anyOf = {
-            android.Manifest.permission.NETWORK_SETTINGS,
-            android.Manifest.permission.NETWORK_SETUP_WIZARD
-    })
     public List<PasspointConfiguration> getPasspointConfigurations() {
         try {
             return mService.getPasspointConfigurations(mContext.getOpPackageName());
@@ -3244,6 +3243,7 @@ public class WifiManager {
      * </p>
      */
     @Deprecated
+    @RequiresPermission(allOf = {ACCESS_WIFI_STATE, ACCESS_FINE_LOCATION}, conditional = true)
     public WifiInfo getConnectionInfo() {
         try {
             return mService.getConnectionInfo(mContext.getOpPackageName(),
@@ -3257,8 +3257,10 @@ public class WifiManager {
      * Return the results of the latest access point scan.
      * @return the list of access points found in the most recent scan. An app must hold
      * {@link android.Manifest.permission#ACCESS_FINE_LOCATION ACCESS_FINE_LOCATION} permission
+     * and {@link android.Manifest.permission#ACCESS_WIFI_STATE} permission
      * in order to get valid results.
      */
+    @RequiresPermission(allOf = {ACCESS_WIFI_STATE, ACCESS_FINE_LOCATION})
     public List<ScanResult> getScanResults() {
         try {
             return mService.getScanResults(mContext.getOpPackageName(),
@@ -3356,88 +3358,100 @@ public class WifiManager {
     }
 
     /**
-     * Helper class to support country code changed listener.
+     * Helper class to support driver country code changed listener.
      */
     private static class OnDriverCountryCodeChangedProxy
             extends IOnWifiDriverCountryCodeChangedListener.Stub {
 
         @NonNull private Executor mExecutor;
-        @NonNull private OnDriverCountryCodeChangedListener mListener;
+        @NonNull private ActiveCountryCodeChangedCallback mCallback;
 
         OnDriverCountryCodeChangedProxy(@NonNull Executor executor,
-                @NonNull OnDriverCountryCodeChangedListener listener) {
+                @NonNull ActiveCountryCodeChangedCallback callback) {
             Objects.requireNonNull(executor);
-            Objects.requireNonNull(listener);
+            Objects.requireNonNull(callback);
             mExecutor = executor;
-            mListener = listener;
+            mCallback = callback;
         }
 
         @Override
         public void onDriverCountryCodeChanged(String countryCode) {
-            Log.i(TAG, "OnDriverCountryCodeChangedProxy: sent onDriverCountryCodeChanged: "
+            Log.i(TAG, "OnDriverCountryCodeChangedProxy: receive onDriverCountryCodeChanged: "
                     + countryCode);
             Binder.clearCallingIdentity();
-            mExecutor.execute(() -> mListener.onDriverCountryCodeChanged(countryCode));
+            if (countryCode != null) {
+                mExecutor.execute(() -> mCallback.onActiveCountryCodeChanged(countryCode));
+            } else {
+                mExecutor.execute(() -> mCallback.onCountryCodeInactive());
+            }
         }
     }
 
     /**
-     * Interface used to listen the driver country code changed event.
+     * Interface used to listen the active country code changed event.
      * @hide
      */
     @SystemApi
-    public interface OnDriverCountryCodeChangedListener {
+    public interface ActiveCountryCodeChangedCallback {
         /**
-         * Called when the driver country code changed, null when the driver isn't active.
+         * Called when the country code used by the Wi-Fi subsystem has changed.
          *
          * @param countryCode An ISO-3166-alpha2 country code which is 2-Character alphanumeric.
          */
-        void onDriverCountryCodeChanged(@Nullable String countryCode);
+        void onActiveCountryCodeChanged(@NonNull String countryCode);
+
+        /**
+         * Called when the Wi-Fi subsystem does not have an active country code.
+         * This can happen when Wi-Fi is disabled.
+         */
+        void onCountryCodeInactive();
     }
 
     /**
-     * Add the provided listener for the driver country code changed event.
-     * Caller will receive
-     * {@link WifiManager.OnDriverCountryCodeChangedListener#onDriverCountryCodeChanged(String)}
+     * Add the provided callback for the active country code changed event.
+     * Caller will receive either
+     * {@link WifiManager.ActiveCountryCodeChangedCallback#onActiveCountryCodeChanged(String)}
+     * or {@link WifiManager.ActiveCountryCodeChangedCallback#onCountryCodeInactive()}
      * on registration.
-     * Caller can remove a previously registered listener using
-     * {@link WifiManager#removeDriverCountryCodeChangedListener(
-     * OnDriverCountryCodeChangedListener)}.
+     *
+     * Caller can remove a previously registered callback using
+     * {@link WifiManager#unregisterActiveCountryCodeChangedCallback(
+     * ActiveCountryCodeChangedCallback)}.
      *
      * <p>
      * Note:
      * The value provided by
-     * {@link WifiManager.OnDriverCountryCodeChangedListener#onDriverCountryCodeChanged(String)}
+     * {@link WifiManager.ActiveCountryCodeChangedCallback#onActiveCountryCodeChanged(String)}
      * may be different from the returned value from {@link WifiManager#getCountryCode()} even if
-     * the WLAN driver is active. See: {@link WifiManager#getCountryCode()} for details.
+     * the Wi-Fi subsystem is active. See: {@link WifiManager#getCountryCode()} for details.
      * </p>
      *
      * @param executor The Executor on which to execute the callbacks.
-     * @param listener listener for the driver country code changed events.
+     * @param callback callback for the driver country code changed events.
      * @hide
      */
     @SystemApi
     @RequiresPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION)
-    public void addDriverCountryCodeChangedListener(
+    public void registerActiveCountryCodeChangedCallback(
             @NonNull @CallbackExecutor Executor executor,
-            @NonNull OnDriverCountryCodeChangedListener listener) {
+            @NonNull ActiveCountryCodeChangedCallback callback) {
         if (executor == null) throw new IllegalArgumentException("executor cannot be null");
-        if (listener == null) throw new IllegalArgumentException("listener cannot be null");
+        if (callback == null) throw new IllegalArgumentException("callback cannot be null");
         if (mVerboseLoggingEnabled) {
-            Log.d(TAG, "addCountryCodeEventListener: listener=" + listener
+            Log.d(TAG, "registerActiveCountryCodeChangedCallback: callback=" + callback
                     + ", executor=" + executor);
         }
-        final int listenerIdentifier = System.identityHashCode(listener);
-        synchronized (sOnWifiDriverCountryCodeChangedListenerMap) {
+        final int callbackIdentifier = System.identityHashCode(callback);
+        synchronized (sActiveCountryCodeChangedCallbackMap) {
             try {
                 IOnWifiDriverCountryCodeChangedListener.Stub binderListener =
-                        new OnDriverCountryCodeChangedProxy(executor, listener);
-                sOnWifiDriverCountryCodeChangedListenerMap.put(listenerIdentifier,
+                        new OnDriverCountryCodeChangedProxy(executor, callback);
+                sActiveCountryCodeChangedCallbackMap.put(callbackIdentifier,
                         binderListener);
                 mService.registerDriverCountryCodeChangedListener(binderListener,
                         mContext.getOpPackageName(), mContext.getAttributionTag());
             } catch (RemoteException e) {
-                sOnWifiDriverCountryCodeChangedListenerMap.remove(listenerIdentifier);
+                sActiveCountryCodeChangedCallbackMap.remove(callbackIdentifier);
                 throw e.rethrowFromSystemServer();
             }
         }
@@ -3445,32 +3459,33 @@ public class WifiManager {
 
     /**
      * Allow callers to remove a previously registered listener. After calling this method,
-     * applications will no longer receive the country code changed events through that listener.
+     * applications will no longer receive the active country code changed events through that
+     * callback.
      *
-     * @param listener Listener to remove the country code changed events.
+     * @param callback Callback to remove the active country code changed events.
      *
      * @hide
      */
     @SystemApi
-    public void removeDriverCountryCodeChangedListener(
-            @NonNull OnDriverCountryCodeChangedListener listener) {
-        if (listener == null) throw new IllegalArgumentException("Listener cannot be null");
+    public void unregisterActiveCountryCodeChangedCallback(
+            @NonNull ActiveCountryCodeChangedCallback callback) {
+        if (callback == null) throw new IllegalArgumentException("Callback cannot be null");
         if (mVerboseLoggingEnabled) {
-            Log.d(TAG, "removeDriverCountryCodeChangedListener: listener=" + listener);
+            Log.d(TAG, "unregisterActiveCountryCodeChangedCallback: callback=" + callback);
         }
-        final int listenerIdentifier = System.identityHashCode(listener);
-        synchronized (sOnWifiDriverCountryCodeChangedListenerMap) {
+        final int callbackIdentifier = System.identityHashCode(callback);
+        synchronized (sActiveCountryCodeChangedCallbackMap) {
             try {
-                if (!sOnWifiDriverCountryCodeChangedListenerMap.contains(listenerIdentifier)) {
-                    Log.w(TAG, "Unknown external listener " + listenerIdentifier);
+                if (!sActiveCountryCodeChangedCallbackMap.contains(callbackIdentifier)) {
+                    Log.w(TAG, "Unknown external listener " + callbackIdentifier);
                     return;
                 }
                 mService.unregisterDriverCountryCodeChangedListener(
-                        sOnWifiDriverCountryCodeChangedListenerMap.get(listenerIdentifier));
+                        sActiveCountryCodeChangedCallbackMap.get(callbackIdentifier));
             } catch (RemoteException e) {
                 throw e.rethrowFromSystemServer();
             } finally {
-                sOnWifiDriverCountryCodeChangedListenerMap.remove(listenerIdentifier);
+                sActiveCountryCodeChangedCallbackMap.remove(callbackIdentifier);
             }
         }
     }
@@ -3491,12 +3506,12 @@ public class WifiManager {
      * <p>
      * Note:
      * This method returns the Country Code value used by the framework - even if not currently
-     * used by the WLAN driver I.e. the returned value from this API may be different from the
+     * used by the Wi-Fi subsystem. I.e. the returned value from this API may be different from the
      * value provided by
-     * {@link WifiManager.OnDriverCountryCodeChangedListener#onDriverCountryCodeChanged(String)}.
+     * {@link WifiManager.ActiveCountryCodeChangedCallback#onActiveCountryCodeChanged(String)}.
      * Such a difference may happen when there is an ongoing network connection (STA, AP, Direct,
-     * or Aware) and the WLAN driver does not support dynamic updates - at that point the framework
-     * may defer setting the Country Code to the WLAN driver.
+     * or Aware) and the Wi-Fi subsystem does not support dynamic updates - at that point the
+     * framework may defer setting the Country Code to the Wi-Fi subsystem.
      * </p>
      * @return the country code in ISO 3166 alpha-2 (2-letter) upper format,
      * or null if there is no country code configured.
@@ -3622,6 +3637,9 @@ public class WifiManager {
      * <ul>
      * <li>Device Owner (DO), Profile Owner (PO) and system apps.
      * </ul>
+     *
+     * Starting with Build.VERSION_CODES#T, DO/COPE may set a user restriction
+     * (DISALLOW_CHANGE_WIFI_STATE) to only allow DO/PO to use this API.
      */
     @Deprecated
     public boolean setWifiEnabled(boolean enabled) {
@@ -4594,31 +4612,13 @@ public class WifiManager {
         }
     }
 
-    /**
-     * Passed with {@link ActionListener#onFailure}.
-     * Indicates that the operation failed due to an internal error.
-     * @hide
-     */
-    public static final int ERROR                       = 0;
-
-    /**
-     * Passed with {@link ActionListener#onFailure}.
-     * Indicates that the operation is already in progress
-     * @hide
-     */
-    public static final int IN_PROGRESS                 = 1;
-
-    /**
-     * Passed with {@link ActionListener#onFailure}.
-     * Indicates that the operation failed because the framework is busy and
-     * unable to service the request
-     * @hide
-     */
-    public static final int BUSY                        = 2;
-
     /** @hide */
     @Retention(RetentionPolicy.SOURCE)
-    @IntDef({ERROR, IN_PROGRESS, BUSY})
+    @IntDef({ActionListener.FAILURE_INTERNAL_ERROR,
+            ActionListener.FAILURE_IN_PROGRESS,
+            ActionListener.FAILURE_BUSY,
+            ActionListener.FAILURE_INVALID_ARGS,
+            ActionListener.FAILURE_NOT_AUTHORIZED})
     public @interface ActionListenerFailureReason {}
 
     /* WPS specific errors */
@@ -4644,25 +4644,42 @@ public class WifiManager {
     public static final int WPS_TIMED_OUT               = 7;
 
     /**
-     * Passed with {@link ActionListener#onFailure}.
-     * Indicates that the operation failed due to invalid inputs
-     * @hide
-     */
-    public static final int INVALID_ARGS                = 8;
-
-    /**
-     * Passed with {@link ActionListener#onFailure}.
-     * Indicates that the operation failed due to user permissions.
-     * @hide
-     */
-    public static final int NOT_AUTHORIZED              = 9;
-
-    /**
      * Interface for callback invocation on an application action
      * @hide
      */
     @SystemApi
     public interface ActionListener {
+        /**
+         * Passed with {@link #onFailure}.
+         * Indicates that the operation failed due to an internal error.
+         */
+        int FAILURE_INTERNAL_ERROR = 0;
+
+        /**
+         * Passed with {@link #onFailure}.
+         * Indicates that the operation is already in progress
+         */
+        int FAILURE_IN_PROGRESS = 1;
+
+        /**
+         * Passed with {@link #onFailure}.
+         * Indicates that the operation failed because the framework is busy and
+         * unable to service the request
+         */
+        int FAILURE_BUSY = 2;
+
+        /**
+         * Passed with {@link #onFailure}.
+         * Indicates that the operation failed due to invalid inputs
+         */
+        int FAILURE_INVALID_ARGS = 3;
+
+        /**
+         * Passed with {@link #onFailure}.
+         * Indicates that the operation failed due to insufficient user permissions.
+         */
+        int FAILURE_NOT_AUTHORIZED = 4;
+
         /**
          * The operation succeeded.
          */
@@ -5426,9 +5443,13 @@ public class WifiManager {
         try {
             mService.connect(config, networkId, listenerProxy);
         } catch (RemoteException e) {
-            if (listenerProxy != null) listenerProxy.onFailure(ERROR);
+            if (listenerProxy != null) {
+                listenerProxy.onFailure(ActionListener.FAILURE_INTERNAL_ERROR);
+            }
         } catch (SecurityException e) {
-            if (listenerProxy != null) listenerProxy.onFailure(NOT_AUTHORIZED);
+            if (listenerProxy != null) {
+                listenerProxy.onFailure(ActionListener.FAILURE_NOT_AUTHORIZED);
+            }
         }
     }
 
@@ -5566,9 +5587,13 @@ public class WifiManager {
         try {
             mService.save(config, listenerProxy);
         } catch (RemoteException e) {
-            if (listenerProxy != null) listenerProxy.onFailure(ERROR);
+            if (listenerProxy != null) {
+                listenerProxy.onFailure(ActionListener.FAILURE_INTERNAL_ERROR);
+            }
         } catch (SecurityException e) {
-            if (listenerProxy != null) listenerProxy.onFailure(NOT_AUTHORIZED);
+            if (listenerProxy != null) {
+                listenerProxy.onFailure(ActionListener.FAILURE_NOT_AUTHORIZED);
+            }
         }
     }
 
@@ -5600,9 +5625,13 @@ public class WifiManager {
         try {
             mService.forget(netId, listenerProxy);
         } catch (RemoteException e) {
-            if (listenerProxy != null) listenerProxy.onFailure(ERROR);
+            if (listenerProxy != null) {
+                listenerProxy.onFailure(ActionListener.FAILURE_INTERNAL_ERROR);
+            }
         } catch (SecurityException e) {
-            if (listenerProxy != null) listenerProxy.onFailure(NOT_AUTHORIZED);
+            if (listenerProxy != null) {
+                listenerProxy.onFailure(ActionListener.FAILURE_NOT_AUTHORIZED);
+            }
         }
     }
 
@@ -5632,7 +5661,7 @@ public class WifiManager {
             if (status) {
                 listener.onSuccess();
             } else {
-                listener.onFailure(ERROR);
+                listener.onFailure(ActionListener.FAILURE_INTERNAL_ERROR);
             }
         }
     }
@@ -5653,19 +5682,6 @@ public class WifiManager {
         }
     }
 
-    /**
-     * Enable/disable quick connect on partial scan results.
-     *
-     * @param  enable true to not allow quick connect, false to allow quick connect
-     * @hide
-     */
-    public void allowConnectOnPartialScanResults(boolean enable) {
-        try {
-            mService.allowConnectOnPartialScanResults(enable);
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
-    }
 
     /**
      * Sets the user choice for allowing auto-join to a network.
@@ -5776,7 +5792,7 @@ public class WifiManager {
      */
     public void startWps(WpsInfo config, WpsCallback listener) {
         if (listener != null ) {
-            listener.onFailed(ERROR);
+            listener.onFailed(ActionListener.FAILURE_INTERNAL_ERROR);
         }
     }
 
@@ -5790,7 +5806,7 @@ public class WifiManager {
      */
     public void cancelWps(WpsCallback listener) {
         if (listener != null) {
-            listener.onFailed(ERROR);
+            listener.onFailed(ActionListener.FAILURE_INTERNAL_ERROR);
         }
     }
 
@@ -8264,7 +8280,7 @@ public class WifiManager {
             android.Manifest.permission.NETWORK_SETTINGS,
             android.Manifest.permission.NETWORK_MANAGED_PROVISIONING,
             android.Manifest.permission.NETWORK_CARRIER_PROVISIONING
-            })
+            }, conditional = true)
     public void flushPasspointAnqpCache() {
         try {
             mService.flushPasspointAnqpCache(mContext.getOpPackageName());

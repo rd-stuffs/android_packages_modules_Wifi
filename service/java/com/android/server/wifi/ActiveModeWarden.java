@@ -50,6 +50,8 @@ import android.os.Message;
 import android.os.Process;
 import android.os.RemoteCallbackList;
 import android.os.RemoteException;
+import android.os.UserHandle;
+import android.os.UserManager;
 import android.os.WorkSource;
 import android.telephony.TelephonyManager;
 import android.text.TextUtils;
@@ -63,6 +65,7 @@ import com.android.internal.util.Preconditions;
 import com.android.internal.util.Protocol;
 import com.android.internal.util.State;
 import com.android.internal.util.StateMachine;
+import com.android.modules.utils.build.SdkLevel;
 import com.android.server.wifi.ActiveModeManager.ClientConnectivityRole;
 import com.android.server.wifi.ActiveModeManager.ClientInternetConnectivityRole;
 import com.android.server.wifi.ActiveModeManager.ClientRole;
@@ -116,6 +119,7 @@ public class ActiveModeWarden {
     private final WifiMetrics mWifiMetrics;
     private final ExternalScoreUpdateObserverProxy mExternalScoreUpdateObserverProxy;
     private final DppManager mDppManager;
+    private final UserManager mUserManager;
 
     private WifiServiceImpl.SoftApCallbackInternal mSoftApCallback;
     private WifiServiceImpl.SoftApCallbackInternal mLohsCallback;
@@ -276,6 +280,7 @@ public class ActiveModeWarden {
         mExternalScoreUpdateObserverProxy = externalScoreUpdateObserverProxy;
         mDppManager = dppManager;
         mGraveyard = new Graveyard();
+        mUserManager = mWifiInjector.getUserManager();
 
         wifiNative.registerStatusListener(isReady -> {
             if (!isReady && !mIsShuttingdown) {
@@ -513,7 +518,13 @@ public class ActiveModeWarden {
         mContext.registerReceiver(new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                if (mSettingsStore.handleAirplaneModeToggled()) {
+                boolean airplaneModeUpdated = mSettingsStore.updateAirplaneModeTracker();
+                boolean userRestrictionSet =
+                        SdkLevel.isAtLeastT() && mUserManager.hasUserRestrictionForUser(
+                                UserManager.DISALLOW_CHANGE_WIFI_STATE,
+                                UserHandle.getUserHandleForUid(Process.SYSTEM_UID));
+                if (!userRestrictionSet && airplaneModeUpdated) {
+                    mSettingsStore.handleAirplaneModeToggled();
                     airplaneModeToggled();
                 }
             }
@@ -1051,6 +1062,12 @@ public class ActiveModeWarden {
             }
             clientModeManager.setRole(ROLE_CLIENT_SCAN_ONLY, requestorWs);
         }
+    }
+
+    private void stopSecondaryClientModeManagers() {
+        stopAllClientModeManagersInRole(ROLE_CLIENT_LOCAL_ONLY);
+        stopAllClientModeManagersInRole(ROLE_CLIENT_SECONDARY_TRANSIENT);
+        stopAllClientModeManagersInRole(ROLE_CLIENT_SECONDARY_LONG_LIVED);
     }
 
     /**
@@ -1815,6 +1832,14 @@ public class ActiveModeWarden {
         private void handleStaToggleChangeInEnabledState(WorkSource requestorWs) {
             if (shouldEnableSta()) {
                 if (hasAnyClientModeManager()) {
+                    if (!mSettingsStore.isWifiToggleEnabled()) {
+                        // Wifi is turned off, so we should stop all the secondary CMMs which are
+                        // currently all for connectivity purpose. It's important to stops the
+                        // secondary CMMs before switch state of the primary CMM so features using
+                        // those secondary CMMs knows to abort properly, and won't react in strange
+                        // ways to the primary switching to scan only mode later.
+                        stopSecondaryClientModeManagers();
+                    }
                     switchAllPrimaryOrScanOnlyClientModeManagers();
                 } else {
                     startPrimaryOrScanOnlyClientModeManager(requestorWs);

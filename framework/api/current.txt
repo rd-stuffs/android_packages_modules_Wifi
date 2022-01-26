@@ -75,7 +75,8 @@ package android.net.wifi {
     method @Nullable public android.net.MacAddress getBssid();
     method @Nullable public String getPassphrase();
     method public int getSecurityType();
-    method @Nullable public String getSsid();
+    method @Deprecated @Nullable public String getSsid();
+    method @Nullable public android.net.wifi.WifiSsid getWifiSsid();
     method public boolean isHiddenSsid();
     method public void writeToParcel(@NonNull android.os.Parcel, int);
     field @NonNull public static final android.os.Parcelable.Creator<android.net.wifi.SoftApConfiguration> CREATOR;
@@ -298,7 +299,7 @@ package android.net.wifi {
     method @Nullable public java.util.List<android.net.wifi.ScanResult.InformationElement> getInformationElements();
     method @Deprecated public int getIpAddress();
     method public int getLinkSpeed();
-    method @RequiresPermission(allOf={android.Manifest.permission.LOCAL_MAC_ADDRESS, android.Manifest.permission.ACCESS_FINE_LOCATION}) public String getMacAddress();
+    method public String getMacAddress();
     method public int getMaxSupportedRxLinkSpeedMbps();
     method public int getMaxSupportedTxLinkSpeedMbps();
     method public int getNetworkId();
@@ -344,7 +345,7 @@ package android.net.wifi {
 
   public class WifiManager {
     method @Deprecated public int addNetwork(android.net.wifi.WifiConfiguration);
-    method @NonNull @RequiresPermission(anyOf={android.Manifest.permission.NETWORK_SETTINGS, android.Manifest.permission.NETWORK_STACK, android.Manifest.permission.NETWORK_SETUP_WIZARD, android.Manifest.permission.NETWORK_MANAGED_PROVISIONING}) public android.net.wifi.WifiManager.AddNetworkResult addNetworkPrivileged(@NonNull android.net.wifi.WifiConfiguration);
+    method @NonNull @RequiresPermission(anyOf={android.Manifest.permission.NETWORK_SETTINGS, android.Manifest.permission.NETWORK_STACK, android.Manifest.permission.NETWORK_SETUP_WIZARD, android.Manifest.permission.NETWORK_MANAGED_PROVISIONING}, conditional=true) public android.net.wifi.WifiManager.AddNetworkResult addNetworkPrivileged(@NonNull android.net.wifi.WifiConfiguration);
     method @RequiresPermission(android.Manifest.permission.CHANGE_WIFI_STATE) public int addNetworkSuggestions(@NonNull java.util.List<android.net.wifi.WifiNetworkSuggestion>);
     method public void addOrUpdatePasspointConfiguration(android.net.wifi.hotspot2.PasspointConfiguration);
     method @RequiresPermission(allOf={android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_WIFI_STATE}) public void addSuggestionConnectionStatusListener(@NonNull java.util.concurrent.Executor, @NonNull android.net.wifi.WifiManager.SuggestionConnectionStatusListener);
@@ -359,16 +360,16 @@ package android.net.wifi {
     method @Deprecated public boolean disableNetwork(int);
     method @Deprecated public boolean disconnect();
     method @Deprecated public boolean enableNetwork(int, boolean);
-    method @RequiresPermission(anyOf={android.Manifest.permission.NETWORK_SETTINGS, android.Manifest.permission.NETWORK_MANAGED_PROVISIONING, android.Manifest.permission.NETWORK_CARRIER_PROVISIONING}) public void flushPasspointAnqpCache();
+    method @RequiresPermission(anyOf={android.Manifest.permission.NETWORK_SETTINGS, android.Manifest.permission.NETWORK_MANAGED_PROVISIONING, android.Manifest.permission.NETWORK_CARRIER_PROVISIONING}, conditional=true) public void flushPasspointAnqpCache();
     method @NonNull @RequiresPermission(android.Manifest.permission.ACCESS_WIFI_STATE) public java.util.List<android.net.wifi.WifiConfiguration> getCallerConfiguredNetworks();
     method @Deprecated @RequiresPermission(allOf={android.Manifest.permission.ACCESS_FINE_LOCATION, android.Manifest.permission.ACCESS_WIFI_STATE}) public java.util.List<android.net.wifi.WifiConfiguration> getConfiguredNetworks();
-    method @Deprecated public android.net.wifi.WifiInfo getConnectionInfo();
+    method @Deprecated @RequiresPermission(allOf={android.Manifest.permission.ACCESS_WIFI_STATE, android.Manifest.permission.ACCESS_FINE_LOCATION}, conditional=true) public android.net.wifi.WifiInfo getConnectionInfo();
     method @Deprecated public android.net.DhcpInfo getDhcpInfo();
     method public int getMaxNumberOfNetworkSuggestionsPerApp();
     method @IntRange(from=0) public int getMaxSignalLevel();
     method @NonNull @RequiresPermission(android.Manifest.permission.ACCESS_WIFI_STATE) public java.util.List<android.net.wifi.WifiNetworkSuggestion> getNetworkSuggestions();
-    method @Deprecated @RequiresPermission(anyOf={android.Manifest.permission.NETWORK_SETTINGS, android.Manifest.permission.NETWORK_SETUP_WIZARD}) public java.util.List<android.net.wifi.hotspot2.PasspointConfiguration> getPasspointConfigurations();
-    method public java.util.List<android.net.wifi.ScanResult> getScanResults();
+    method @Deprecated public java.util.List<android.net.wifi.hotspot2.PasspointConfiguration> getPasspointConfigurations();
+    method @RequiresPermission(allOf={android.Manifest.permission.ACCESS_WIFI_STATE, android.Manifest.permission.ACCESS_FINE_LOCATION}) public java.util.List<android.net.wifi.ScanResult> getScanResults();
     method public int getWifiState();
     method public boolean is24GHzBandSupported();
     method public boolean is5GHzBandSupported();
@@ -410,7 +411,7 @@ package android.net.wifi {
     method @Deprecated public boolean removeNetwork(int);
     method @RequiresPermission(android.Manifest.permission.CHANGE_WIFI_STATE) public int removeNetworkSuggestions(@NonNull java.util.List<android.net.wifi.WifiNetworkSuggestion>);
     method @RequiresPermission(android.Manifest.permission.CHANGE_WIFI_STATE) public boolean removeNonCallerConfiguredNetworks();
-    method @Deprecated @RequiresPermission(anyOf={android.Manifest.permission.NETWORK_SETTINGS, android.Manifest.permission.NETWORK_CARRIER_PROVISIONING}) public void removePasspointConfiguration(String);
+    method @Deprecated public void removePasspointConfiguration(String);
     method @RequiresPermission(android.Manifest.permission.ACCESS_WIFI_STATE) public void removeSuggestionConnectionStatusListener(@NonNull android.net.wifi.WifiManager.SuggestionConnectionStatusListener);
     method @RequiresPermission(android.Manifest.permission.ACCESS_WIFI_STATE) public void removeSuggestionUserApprovalStatusListener(@NonNull android.net.wifi.WifiManager.SuggestionUserApprovalStatusListener);
     method @Deprecated public boolean saveConfiguration();
@@ -638,6 +639,17 @@ package android.net.wifi {
     method @Deprecated @NonNull public android.net.wifi.WifiNetworkSuggestion.Builder setWpa3EnterpriseConfig(@NonNull android.net.wifi.WifiEnterpriseConfig);
     method @NonNull public android.net.wifi.WifiNetworkSuggestion.Builder setWpa3EnterpriseStandardModeConfig(@NonNull android.net.wifi.WifiEnterpriseConfig);
     method @NonNull public android.net.wifi.WifiNetworkSuggestion.Builder setWpa3Passphrase(@NonNull String);
+  }
+
+  public final class WifiSsid implements android.os.Parcelable {
+    method public int describeContents();
+    method @NonNull public static android.net.wifi.WifiSsid fromBytes(@Nullable byte[]);
+    method @NonNull public static android.net.wifi.WifiSsid fromString(@Nullable String);
+    method @NonNull public static android.net.wifi.WifiSsid fromUtf8Text(@Nullable CharSequence);
+    method @NonNull public byte[] getBytes();
+    method @Nullable public CharSequence getUtf8Text();
+    method public void writeToParcel(@NonNull android.os.Parcel, int);
+    field @NonNull public static final android.os.Parcelable.Creator<android.net.wifi.WifiSsid> CREATOR;
   }
 
   public class WpsInfo implements android.os.Parcelable {

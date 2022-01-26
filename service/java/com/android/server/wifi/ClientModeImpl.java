@@ -248,6 +248,7 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
     private final String mInterfaceName;
     private final ConcreteClientModeManager mClientModeManager;
 
+    private boolean mFailedToResetMacAddress = false;
     private int mLastSignalLevel = -1;
     private int mLastTxKbps = -1;
     private int mLastRxKbps = -1;
@@ -622,6 +623,9 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
     // internet is less than this value.
     @VisibleForTesting
     public static final int PROBABILITY_WITH_INTERNET_TO_PERMANENTLY_DISABLE_NETWORK = 60;
+    // Disable a network permanently due to wrong password even if the network had successfully
+    // connected before wrong password failure on this network reached this threshold.
+    public static final int THRESHOLD_TO_PERM_WRONG_PASSWORD = 3;
 
     // Maximum duration to continue to log Wifi usability stats after a data stall is triggered.
     @VisibleForTesting
@@ -1037,31 +1041,36 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
                 mWifiBlocklistMonitor.handleNetworkRemoved(newConfig.SSID);
             }
 
-            // Check if user/app change meteredOverride for connected network.
-            if (newConfig.networkId != mLastNetworkId
-                    || newConfig.meteredOverride == oldConfig.meteredOverride) {
+            if (newConfig.networkId != mLastNetworkId)  {
                 // nothing to do.
                 return;
             }
             boolean isMetered = WifiConfiguration.isMetered(newConfig, mWifiInfo);
             boolean wasMetered = WifiConfiguration.isMetered(oldConfig, mWifiInfo);
-            if (isMetered == wasMetered) {
-                // no meteredness change, nothing to do.
-                if (mVerboseLoggingEnabled) {
-                    Log.v(getTag(), "User/app changed meteredOverride, "
-                            + "but no change in meteredness");
-                }
+            // Check if user/app change meteredOverride or trusted for connected network.
+            if (isMetered == wasMetered
+                    && (!SdkLevel.isAtLeastT() || newConfig.trusted == oldConfig.trusted)) {
                 return;
             }
-            // If unmetered->metered trigger a disconnect.
-            // If metered->unmetered update capabilities.
+
+            if (SdkLevel.isAtLeastT()) {
+                mWifiInfo.setTrusted(newConfig.trusted);
+                if (!newConfig.trusted) {
+                    Log.w(getTag(), "Network marked untrusted, triggering disconnect");
+                    sendMessage(CMD_DISCONNECT, StaEvent.DISCONNECT_NETWORK_UNTRUSTED);
+                    return;
+                }
+            }
+
             if (isMetered) {
                 Log.w(getTag(), "Network marked metered, triggering disconnect");
                 sendMessage(CMD_DISCONNECT, StaEvent.DISCONNECT_NETWORK_METERED);
-            } else {
-                Log.i(getTag(), "Network marked unmetered, triggering capabilities update");
-                updateCapabilities(newConfig);
+                return;
             }
+
+            Log.i(getTag(), "Network marked metered=" + isMetered
+                    + " trusted=" + newConfig.trusted + ", triggering capabilities update");
+            updateCapabilities(newConfig);
         }
 
         @Override
@@ -1214,6 +1223,27 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
         period = (int) (now - mLastScreenStateChangeTimeStamp);
         sb.append(String.format(" from screen [on:%d period:%d]", on, period));
         return sb.toString();
+    }
+
+    /**
+     * receives changes in the interface up/down events for the interface associated with this
+     * ClientModeImpl. This is expected to be called from the ClientModeManager running on the
+     * wifi handler thread.
+     */
+    public void onUpChanged(boolean isUp) {
+        if (isUp && mFailedToResetMacAddress) {
+            // When the firmware does a subsystem restart, wifi will disconnect but we may fail to
+            // re-randomize the MAC address of the interface since it's undergoing recovery. Thus,
+            // check every time the interface goes up and re-randomize if the failure was detected.
+            if (mWifiGlobals.isConnectedMacRandomizationEnabled()) {
+                mFailedToResetMacAddress = !mWifiNative.setStaMacAddress(
+                        mInterfaceName, MacAddressUtils.createRandomUnicastAddress());
+                if (mFailedToResetMacAddress) {
+                    Log.e(getTag(), "Failed to set random MAC address on interface up");
+                }
+            }
+        }
+        // No need to handle interface down since it's already handled in the ClientModeManager.
     }
 
     public WifiLinkLayerStats getWifiLinkLayerStats() {
@@ -2543,6 +2573,7 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
     }
 
     private void updateWifiInfoWhenConnected(@NonNull WifiConfiguration config) {
+        mWifiInfo.setHiddenSSID(config.hiddenSSID);
         mWifiInfo.setEphemeral(config.ephemeral);
         mWifiInfo.setTrusted(config.trusted);
         mWifiInfo.setOemPaid(config.oemPaid);
@@ -2874,6 +2905,11 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
                         >= WifiBlocklistMonitor.NUM_CONSECUTIVE_FAILURES_PER_NETWORK_EXP_BACKOFF) {
                     mWifiConfigManager.updateNetworkSelectionStatus(mTargetNetworkId,
                             WifiConfiguration.NetworkSelectionStatus.DISABLED_CONSECUTIVE_FAILURES);
+                }
+                if (recentStats.getCount(WifiScoreCard.CNT_CONSECUTIVE_WRONG_PASSWORD_FAILURE)
+                        >= THRESHOLD_TO_PERM_WRONG_PASSWORD) {
+                    mWifiConfigManager.updateNetworkSelectionStatus(mTargetNetworkId,
+                            WifiConfiguration.NetworkSelectionStatus.DISABLED_BY_WRONG_PASSWORD);
                 }
             }
         }
@@ -3227,9 +3263,10 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
         mLastSimBasedConnectionCarrierName = null;
         mLastSignalLevel = -1;
         if (mWifiGlobals.isConnectedMacRandomizationEnabled()) {
-            if (!mWifiNative.setStaMacAddress(
-                    mInterfaceName, MacAddressUtils.createRandomUnicastAddress())) {
-                Log.e(getTag(), "Failed to set random MAC address on bootup");
+            mFailedToResetMacAddress = !mWifiNative.setStaMacAddress(
+                    mInterfaceName, MacAddressUtils.createRandomUnicastAddress());
+            if (mFailedToResetMacAddress) {
+                Log.e(getTag(), "Failed to set random MAC address on ClientMode creation");
             }
         }
         mWifiInfo.setMacAddress(mWifiNative.getMacAddress(mInterfaceName));
@@ -3650,7 +3687,7 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
                     ConnectNetworkMessage cnm = (ConnectNetworkMessage) message.obj;
                     if (mIpClient == null) {
                         logd("IpClient is not ready, CONNECT_NETWORK dropped");
-                        cnm.listener.sendFailure(WifiManager.ERROR);
+                        cnm.listener.sendFailure(WifiManager.ActionListener.FAILURE_INTERNAL_ERROR);
                         break;
                     }
                     NetworkUpdateResult result = cnm.result;
@@ -3666,7 +3703,7 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
                     ConnectNetworkMessage cnm = (ConnectNetworkMessage) message.obj;
                     if (mIpClient == null) {
                         logd("IpClient is not ready, SAVE_NETWORK dropped");
-                        cnm.listener.sendFailure(WifiManager.ERROR);
+                        cnm.listener.sendFailure(WifiManager.ActionListener.FAILURE_INTERNAL_ERROR);
                         break;
                     }
                     NetworkUpdateResult result = cnm.result;
@@ -4273,8 +4310,9 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
             // 2. Set a random MAC address to ensure that we're not leaking the MAC address.
             mWifiNative.disableNetwork(mInterfaceName);
             if (mWifiGlobals.isConnectedMacRandomizationEnabled()) {
-                if (!mWifiNative.setStaMacAddress(
-                        mInterfaceName, MacAddressUtils.createRandomUnicastAddress())) {
+                mFailedToResetMacAddress = !mWifiNative.setStaMacAddress(
+                        mInterfaceName, MacAddressUtils.createRandomUnicastAddress());
+                if (mFailedToResetMacAddress) {
                     Log.e(getTag(), "Failed to set random MAC address on disconnect");
                 }
             }
@@ -4805,7 +4843,7 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
                             (NetworkConnectionEventInfo) message.obj;
                     String quotedOrHexConnectingSsid = getConnectingSsidInternal();
                     String quotedOrHexConnectedSsid = NativeUtil.encodeSsid(
-                            NativeUtil.byteArrayToArrayList(connectionInfo.wifiSsid.getOctets()));
+                            NativeUtil.byteArrayToArrayList(connectionInfo.wifiSsid.getBytes()));
                     if (quotedOrHexConnectingSsid != null
                             && !quotedOrHexConnectingSsid.equals(quotedOrHexConnectedSsid)) {
                         // possibly a NETWORK_CONNECTION_EVENT for a successful roam on the previous
@@ -4902,7 +4940,7 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
             if (mVcnManager == null && SdkLevel.isAtLeastS()) {
                 mVcnManager = mContext.getSystemService(VcnManager.class);
             }
-            if (mVcnManager != null) {
+            if (mVcnManager != null && mVcnPolicyChangeListener == null) {
                 mVcnPolicyChangeListener = new WifiVcnNetworkPolicyChangeListener();
                 mVcnManager.addVcnNetworkPolicyChangeListener(new HandlerExecutor(getHandler()),
                         mVcnPolicyChangeListener);
@@ -5180,7 +5218,7 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
                             mWifiNative.removeNetworkCachedData(mLastNetworkId);
                             // remove network so that supplicant's PMKSA cache is cleared
                             mWifiNative.removeAllNetworks(mInterfaceName);
-                            if (isPrimary()) {
+                            if (isPrimary() && !mWifiCarrierInfoManager.isSimReady(mLastSubId)) {
                                 mSimRequiredNotifier.showSimRequiredNotification(
                                         config, mLastSimBasedConnectionCarrierName);
                             }

@@ -26,7 +26,6 @@ import android.os.Message;
 import android.util.ArraySet;
 import android.util.Log;
 import android.util.SparseArray;
-import static android.net.wifi.WifiScanner.ON_PARTIAL_SCAN_RESULTS;
 
 import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.util.Protocol;
@@ -328,7 +327,8 @@ public class WifiMonitor {
                 break;
         }
         //For all other errors, return a generic internal error
-        sendMessage(iface, WPS_FAIL_EVENT, WifiManager.ERROR, reason);
+        sendMessage(iface, WPS_FAIL_EVENT, WifiManager.ActionListener.FAILURE_INTERNAL_ERROR,
+                reason);
     }
 
    /**
@@ -466,14 +466,6 @@ public class WifiMonitor {
      */
     public void broadcastScanResultEvent(String iface) {
         sendMessage(iface, SCAN_RESULTS_EVENT);
-    }
-
-    /**
-     * Broadcast partial scan result event to all the handlers registered for this event.
-     * @param iface Name of iface on which this occurred.
-     */
-    public void broadcastPartialScanResultEvent(String iface) {
-        sendMessage(iface, SCAN_RESULTS_EVENT, ON_PARTIAL_SCAN_RESULTS);
     }
 
     /**

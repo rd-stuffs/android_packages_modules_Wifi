@@ -32,6 +32,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeTrue;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.any;
@@ -42,6 +43,7 @@ import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.never;
@@ -72,6 +74,7 @@ import android.os.Build;
 import android.os.IBinder;
 import android.os.Process;
 import android.os.RemoteException;
+import android.os.UserManager;
 import android.os.WorkSource;
 import android.os.test.TestLooper;
 import android.telephony.TelephonyManager;
@@ -79,6 +82,7 @@ import android.util.Log;
 
 import androidx.test.filters.SmallTest;
 
+import com.android.modules.utils.build.SdkLevel;
 import com.android.server.wifi.ActiveModeManager.ClientConnectivityRole;
 import com.android.server.wifi.ActiveModeManager.Listener;
 import com.android.server.wifi.ActiveModeManager.SoftApRole;
@@ -91,6 +95,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
@@ -156,6 +161,7 @@ public class ActiveModeWardenTest extends WifiBaseTest {
     @Mock DppManager mDppManager;
     @Mock SarManager mSarManager;
     @Mock HalDeviceManager mHalDeviceManager;
+    @Mock UserManager mUserManager;
 
     Listener<ConcreteClientModeManager> mClientListener;
     Listener<SoftApManager> mSoftApListener;
@@ -186,6 +192,7 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         when(mWifiInjector.getScanRequestProxy()).thenReturn(mScanRequestProxy);
         when(mWifiInjector.getSarManager()).thenReturn(mSarManager);
         when(mWifiInjector.getHalDeviceManager()).thenReturn(mHalDeviceManager);
+        when(mWifiInjector.getUserManager()).thenReturn(mUserManager);
         when(mClientModeManager.getRole()).thenReturn(ROLE_CLIENT_PRIMARY);
         when(mClientModeManager.getInterfaceName()).thenReturn(WIFI_IFACE_NAME);
         when(mContext.getResources()).thenReturn(mResources);
@@ -702,6 +709,52 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         verify(mPrimaryChangedCallback).onChange(mClientModeManager, null);
+    }
+
+    /**
+     * Test that wifi toggle switching the primary to scan only mode will also remove the additional
+     * CMMs.
+     */
+    @Test
+    public void testSwitchFromConnectModeToScanOnlyModeRemovesAdditionalCMMs() throws Exception {
+        // Ensure that we can create more client ifaces.
+        when(mWifiNative.isItPossibleToCreateStaIface(any())).thenReturn(true);
+        when(mResources.getBoolean(
+                R.bool.config_wifiMultiStaNetworkSwitchingMakeBeforeBreakEnabled))
+                .thenReturn(true);
+        assertTrue(mActiveModeWarden.canRequestMoreClientModeManagersInRole(
+                TEST_WORKSOURCE, ROLE_CLIENT_SECONDARY_TRANSIENT));
+
+        // request for an additional CMM
+        ConcreteClientModeManager additionalClientModeManager =
+                mock(ConcreteClientModeManager.class);
+        ExternalClientModeManagerRequestListener externalRequestListener = mock(
+                ExternalClientModeManagerRequestListener.class);
+        Listener<ConcreteClientModeManager> additionalClientListener =
+                requestAdditionalClientModeManager(ROLE_CLIENT_SECONDARY_TRANSIENT,
+                        additionalClientModeManager, externalRequestListener, TEST_SSID_2,
+                        TEST_BSSID_2);
+
+        // Verify that there exists both a primary and a secondary transient CMM
+        List<ClientModeManager> currentCMMs = mActiveModeWarden.getClientModeManagers();
+        assertEquals(2, currentCMMs.size());
+        assertTrue(currentCMMs.stream().anyMatch(cmm -> cmm.getRole() == ROLE_CLIENT_PRIMARY));
+        assertTrue(currentCMMs.stream().anyMatch(
+                cmm -> cmm.getRole() == ROLE_CLIENT_SECONDARY_TRANSIENT));
+
+        InOrder inOrder = inOrder(additionalClientModeManager, mClientModeManager);
+        // disable wifi and switch primary CMM to scan only mode
+        when(mWifiPermissionsUtil.isLocationModeEnabled()).thenReturn(true);
+        when(mSettingsStore.isAirplaneModeOn()).thenReturn(false);
+        when(mSettingsStore.isScanAlwaysAvailable()).thenReturn(true);
+        when(mSettingsStore.isWifiToggleEnabled()).thenReturn(false);
+        mActiveModeWarden.wifiToggled(TEST_WORKSOURCE);
+        mLooper.dispatchAll();
+
+        // Verify that we first stop the additional CMM and then switch the primary to scan only
+        // mode
+        inOrder.verify(additionalClientModeManager).stop();
+        inOrder.verify(mClientModeManager).setRole(ROLE_CLIENT_SCAN_ONLY, INTERNAL_REQUESTOR_WS);
     }
 
     /**
@@ -1306,6 +1359,44 @@ public class ActiveModeWardenTest extends WifiBaseTest {
         mLooper.dispatchAll();
 
         assertInEnabledState();
+    }
+
+    /**
+     * Do not change Wi-Fi state when airplane mode changes if
+     * DISALLOW_CHANGE_WIFI_STATE user restriction is set.
+     */
+    @Test
+    public void testWifiStateUnaffectedByAirplaneMode() throws Exception {
+        assumeTrue(SdkLevel.isAtLeastT());
+        when(mUserManager.hasUserRestrictionForUser(eq(UserManager.DISALLOW_CHANGE_WIFI_STATE),
+                any())).thenReturn(true);
+        when(mSettingsStore.updateAirplaneModeTracker()).thenReturn(true);
+
+        reset(mContext);
+        when(mContext.getResources()).thenReturn(mResources);
+        mActiveModeWarden = createActiveModeWarden();
+        mActiveModeWarden.start();
+        mLooper.dispatchAll();
+
+        ArgumentCaptor<BroadcastReceiver> bcastRxCaptor =
+                ArgumentCaptor.forClass(BroadcastReceiver.class);
+        verify(mContext).registerReceiver(
+                bcastRxCaptor.capture(),
+                argThat(filter -> filter.hasAction(Intent.ACTION_AIRPLANE_MODE_CHANGED)));
+        BroadcastReceiver broadcastReceiver = bcastRxCaptor.getValue();
+
+        Intent intent = new Intent(Intent.ACTION_AIRPLANE_MODE_CHANGED);
+        broadcastReceiver.onReceive(mContext, intent);
+        mLooper.dispatchAll();
+
+        verify(mSettingsStore, never()).handleAirplaneModeToggled();
+
+        when(mUserManager.hasUserRestrictionForUser(eq(UserManager.DISALLOW_CHANGE_WIFI_STATE),
+                any())).thenReturn(false);
+        broadcastReceiver.onReceive(mContext, intent);
+        mLooper.dispatchAll();
+
+        verify(mSettingsStore).handleAirplaneModeToggled();
     }
 
 

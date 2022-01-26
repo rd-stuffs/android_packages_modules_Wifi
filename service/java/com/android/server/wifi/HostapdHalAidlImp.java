@@ -54,6 +54,7 @@ import com.android.server.wifi.util.ApConfigUtil;
 import com.android.server.wifi.util.NativeUtil;
 import com.android.wifi.resources.R;
 
+import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -422,6 +423,10 @@ public class HostapdHalAidlImp implements IHostapdHal {
      * Indicates whether the AIDL service is declared
      */
     public static boolean serviceDeclared() {
+        // Service Manager API ServiceManager#isDeclared supported after T.
+        if (!SdkLevel.isAtLeastT()) {
+            return false;
+        }
         return ServiceManager.isDeclared(HAL_INSTANCE_NAME);
     }
 
@@ -850,4 +855,12 @@ public class HostapdHalAidlImp implements IHostapdHal {
         }
     }
 
+    /**
+     * Dump information about the AIDL implementation.
+     *
+     * TODO (b/202302891) Log version information once we freeze the AIDL interface
+     */
+    public void dump(PrintWriter pw) {
+        pw.println("AIDL interface version: 1 (initial)");
+    }
 }

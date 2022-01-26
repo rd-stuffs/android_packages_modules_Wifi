@@ -109,6 +109,7 @@ public class WifiInfo implements TransportInfo, Parcelable {
     private String mBSSID;
     @UnsupportedAppUsage
     private WifiSsid mWifiSsid;
+    private boolean mIsHiddenSsid = false;
     private int mNetworkId;
     private int mSecurityType;
 
@@ -466,6 +467,7 @@ public class WifiInfo implements TransportInfo, Parcelable {
         setInetAddress(null);
         setBSSID(null);
         setSSID(null);
+        setHiddenSSID(false);
         setNetworkId(-1);
         setRssi(INVALID_RSSI);
         setLinkSpeed(LINK_SPEED_UNKNOWN);
@@ -519,7 +521,7 @@ public class WifiInfo implements TransportInfo, Parcelable {
             mBSSID = shouldRedactLocationSensitiveFields(redactions)
                     ? DEFAULT_MAC_ADDRESS : source.mBSSID;
             mWifiSsid = shouldRedactLocationSensitiveFields(redactions)
-                    ? WifiSsid.createFromHex(null) : source.mWifiSsid;
+                    ? null : source.mWifiSsid;
             mNetworkId = shouldRedactLocationSensitiveFields(redactions)
                     ? INVALID_NETWORK_ID : source.mNetworkId;
             mRssi = source.mRssi;
@@ -582,7 +584,7 @@ public class WifiInfo implements TransportInfo, Parcelable {
          */
         @NonNull
         public Builder setSsid(@NonNull byte[] ssid) {
-            mWifiInfo.setSSID(WifiSsid.createFromByteArray(ssid));
+            mWifiInfo.setSSID(WifiSsid.fromBytes(ssid));
             return this;
         }
 
@@ -657,12 +659,9 @@ public class WifiInfo implements TransportInfo, Parcelable {
      */
     public String getSSID() {
         if (mWifiSsid != null) {
-            String unicode = mWifiSsid.toString();
-            if (!TextUtils.isEmpty(unicode)) {
-                return "\"" + unicode + "\"";
-            } else {
-                String hex = mWifiSsid.getHexString();
-                return (hex != null) ? hex : WifiManager.UNKNOWN_SSID;
+            String ssidString = mWifiSsid.toString();
+            if (!TextUtils.isEmpty(ssidString)) {
+                return ssidString;
             }
         }
         return WifiManager.UNKNOWN_SSID;
@@ -870,11 +869,10 @@ public class WifiInfo implements TransportInfo, Parcelable {
      * Returns the MAC address used for this connection.
      * @return MAC address of the connection or {@code "02:00:00:00:00:00"} if the caller has
      * insufficient permission.
+     *
+     * Requires {@code android.Manifest.permission#LOCAL_MAC_ADDRESS} and
+     * {@link android.Manifest.permission#ACCESS_FINE_LOCATION}.
      */
-    @RequiresPermission(allOf = {
-            Manifest.permission.LOCAL_MAC_ADDRESS,
-            Manifest.permission.ACCESS_FINE_LOCATION
-    })
     public String getMacAddress() {
         return mMacAddress;
     }
@@ -1147,8 +1145,16 @@ public class WifiInfo implements TransportInfo, Parcelable {
      * SSID-specific probe request must be used for scans.
      */
     public boolean getHiddenSSID() {
-        if (mWifiSsid == null) return false;
-        return mWifiSsid.isHidden();
+        return mIsHiddenSsid;
+    }
+
+    /**
+     * Sets whether or not this network is using a hidden SSID. This value should be set from the
+     * corresponding {@link WifiConfiguration} of the network.
+     * @hide
+     */
+    public void setHiddenSSID(boolean isHiddenSsid) {
+        mIsHiddenSsid = isHiddenSsid;
     }
 
     /**

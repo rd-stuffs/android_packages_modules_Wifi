@@ -108,9 +108,13 @@ public class WifiGbk {
             logi("Invalid ScanResult - BSSID=" + result.BSSID + " SSID=" + result.SSID);
             return false;
         }
+        // TODO(b/208146343) support for isHidden() is removed and an SSID's hidden status
+        // is now stored in WifiInfo. Update as necessary.
+        /*
         if (result.wifiSsid.isHidden()) {
             return false;
         }
+        */
         return true;
     }
 
@@ -372,17 +376,17 @@ public class WifiGbk {
 
 
     /**
-     * For Utf ssidBytes, it equals to WifiSsid.createFromByteArray().
+     * For Utf ssidBytes, it equals to WifiSsid.fromBytes().
      * For Gbk ssidBytes, it will convert to utfBytes, then create WifiSsid.
      */
     public static WifiSsid createWifiSsidFromByteArray(byte[] ssidBytes) {
         if (isGbk(ssidBytes)) {
             byte[] utfBytes = toUtf(ssidBytes);
             if (utfBytes != null) {
-                return WifiSsid.createFromByteArray(utfBytes);
+                return WifiSsid.fromBytes(utfBytes);
             }
         }
-        return WifiSsid.createFromByteArray(ssidBytes);
+        return WifiSsid.fromBytes(ssidBytes);
     }
 
     /**
@@ -576,7 +580,7 @@ public class WifiGbk {
                 return false;
             } else {
                 result.SSID = NativeUtil.removeEnclosingQuotes(this.SSID);
-                result.wifiSsid = WifiSsid.createFromByteArray(utfBytes);
+                result.wifiSsid = WifiSsid.fromBytes(utfBytes);
             }
             return true;
         }
