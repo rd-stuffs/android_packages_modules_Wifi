@@ -66,6 +66,7 @@
           <item type="bool" name="config_wifiSoftapResetUserControlConfig" />
           <item type="bool" name="config_wifiSoftapResetAutoShutdownTimerConfig" />
           <item type="bool" name="config_wifiSoftapResetMaxClientSettingConfig" />
+          <item type="bool" name="config_wifiSoftapAutoUpgradeToBridgedConfigWhenSupported" />
           <item type="string"  name="config_wifiSoftap2gChannelList" />
           <item type="string"  name="config_wifiSoftap5gChannelList" />
           <item type="string"  name="config_wifiSoftap6gChannelList" />
@@ -74,6 +75,8 @@
           <item type="integer" name="config_wifi_framework_recovery_timeout_delay" />
           <item type="bool" name="config_wifi_framework_enable_associated_network_selection" />
           <item type="integer" name="config_wifiSufficientDurationAfterUserSelectionMilliseconds" />
+          <item type="integer" name="config_wifiLowConnectedScoreThresholdToTriggerScanForMbb" />
+          <item type="integer" name="config_wifiLowConnectedScoreScanPeriodSeconds" />
           <item type="bool" name="config_wifiEnable6ghzPscScanning" />
           <item type="bool" name="config_wifiEnablePartialInitialScan" />
           <item type="integer" name="config_wifiInitialPartialScanChannelMaxCount" />
@@ -127,6 +130,9 @@
           <item type="array" name="config_wifiDisconnectedScanIntervalScheduleSec" />
           <item type="array" name="config_wifiConnectedScanIntervalScheduleSec" />
           <item type="array" name="config_wifiSingleSavedNetworkConnectedScanIntervalScheduleSec" />
+          <item type="array" name="config_wifiDisconnectedScanType" />
+          <item type="array" name="config_wifiConnectedScanType" />
+          <item type="array" name="config_wifiSingleSavedNetworkConnectedScanType" />
           <item type="integer" name="config_wifiPnoScanLowRssiNetworkRetryStartDelaySec" />
           <item type="integer" name="config_wifiPnoScanLowRssiNetworkRetryMaxDelaySec" />
           <item type="integer" name="config_wifiConnectedHighRssiScanMinimumWindowSizeSec" />
@@ -183,11 +189,13 @@
           <item type="bool" name="config_wifiMultiStaNetworkSwitchingMakeBeforeBreakEnabled" />
           <item type="bool" name="config_wifiMultiStaLocalOnlyConcurrencyEnabled" />
           <item type="bool" name="config_wifiMultiStaRestrictedConcurrencyEnabled" />
+          <item type="bool" name="config_wifiMultiStaMultiInternetConcurrencyEnabled" />
           <item type="bool" name="config_wifiDefaultCoexAlgorithmEnabled"/>
           <item type="string" name="config_wifiCoexTableFilepath"/>
           <item type="integer" name="config_wifiDisableReasonAuthenticationFailureCarrierSpecificThreshold" />
           <item type="integer" name="config_wifiDisableReasonAuthenticationFailureCarrierSpecificDurationMs" />
           <item type="bool" name="config_wifiAllowMultipleNetworksOnSameAwareNdi"/>
+          <item type="bool" name="config_wifiSupportChannelOnDataPath"/>
           <item type="integer" name="config_wifiTrafficPollerTxPacketThreshold"/>
           <item type="integer" name="config_wifiTrafficPollerRxPacketThreshold"/>
           <item type="integer" name="config_wifiLinkBandwidthUpdateThresholdPercent" />
@@ -205,7 +213,9 @@
           <item type="integer" name="config_wifiClientModeImplNumLogRecs" />
           <item type="bool" name="config_vendor_wifi_softap_owe_supported" />
           <item type="bool" name="config_wifiDriverSupportedNl80211RegChangedEvent" />
+          <item type="integer" name="config_wifiVerboseLoggingAlwaysOnLevel" />
           <item type="bool" name="config_disconnectOnlyOnInitialIpReachability" />
+          <item type="string" name="config_wifiCertInstallationHelpLink" />
           <!-- Params from config.xml that can be overlayed -->
 
           <!-- Params from strings.xml that can be overlayed -->

@@ -63,6 +63,7 @@ import com.android.server.wifi.Clock;
 import com.android.server.wifi.util.NetdWrapper;
 import com.android.server.wifi.util.WifiPermissionsUtil;
 import com.android.server.wifi.util.WifiPermissionsWrapper;
+import com.android.wifi.resources.R;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -693,6 +694,15 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
      */
     public boolean isInstantCommunicationModeEnabled() {
         return mIsInstantCommunicationModeEnabled;
+    }
+
+    /**
+     * Get if set channel on data-path request is supported.
+     * @return true if supported, false otherwise.
+     */
+    public boolean isSetChannelOnDataPathSupported() {
+        return mContext.getResources()
+                .getBoolean(R.bool.config_wifiSupportChannelOnDataPath);
     }
 
     /**
@@ -2402,6 +2412,7 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
         }
         boolean notificationRequired =
                 doesAnyClientNeedIdentityChangeNotifications() || notifyIdentityChange;
+        boolean rangingRequired = doesAnyClientNeedRanging();
 
         if (mCurrentAwareConfiguration == null) {
             mWifiAwareNativeManager.tryToGetAware(new WorkSource(uid, callingPackage));
@@ -2410,7 +2421,7 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
         boolean success = mWifiAwareNativeApi.enableAndConfigure(transactionId, merged,
                 notificationRequired, mCurrentAwareConfiguration == null,
                 mPowerManager.isInteractive(), mPowerManager.isDeviceIdleMode(),
-                mCurrentRangingEnabled, mIsInstantCommunicationModeEnabled);
+                rangingRequired, mIsInstantCommunicationModeEnabled);
         if (!success) {
             try {
                 callback.onConnectFail(NanStatusType.INTERNAL_FAILURE);
@@ -2446,6 +2457,8 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
         if (mClients.size() == 0) {
             mCurrentAwareConfiguration = null;
             mDataPathMgr.deleteAllInterfaces();
+            mCurrentRangingEnabled = false;
+            mCurrentIdentityNotification = false;
             deferDisableAware();
             return false;
         }
@@ -2683,6 +2696,8 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
         onAwareDownLocal();
 
         mUsageEnabled = markAsAvailable;
+        mCurrentRangingEnabled = false;
+        mCurrentIdentityNotification = false;
         deferDisableAware();
         sendAwareStateChangedBroadcast(markAsAvailable);
         mAwareMetrics.recordDisableUsage();
@@ -3298,13 +3313,14 @@ public class WifiAwareStateManager implements WifiAwareShellCommand.DelegatedShe
         }
 
         for (int i = 0; i < mClients.size(); ++i) {
-            mAwareMetrics.recordAttachSessionDuration(mClients.valueAt(i).getCreationTime());
-            SparseArray<WifiAwareDiscoverySessionState> sessions = mClients.valueAt(
-                    i).getSessions();
+            WifiAwareClientState client = mClients.valueAt(i);
+            mAwareMetrics.recordAttachSessionDuration(client.getCreationTime());
+            SparseArray<WifiAwareDiscoverySessionState> sessions = client.getSessions();
             for (int j = 0; j < sessions.size(); ++j) {
                 mAwareMetrics.recordDiscoverySessionDuration(sessions.valueAt(j).getCreationTime(),
                         sessions.valueAt(j).isPublishSession());
             }
+            client.destroy();
         }
         mAwareMetrics.recordDisableAware();
 

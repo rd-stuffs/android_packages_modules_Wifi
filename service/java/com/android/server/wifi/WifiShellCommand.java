@@ -22,6 +22,9 @@ import static android.net.NetworkCapabilities.NET_CAPABILITY_OEM_PRIVATE;
 import static android.net.NetworkCapabilities.NET_CAPABILITY_TRUSTED;
 import static android.net.NetworkCapabilities.TRANSPORT_WIFI;
 import static android.net.wifi.WifiConfiguration.METERED_OVERRIDE_METERED;
+import static android.net.wifi.WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT;
+import static android.net.wifi.WifiManager.ACTION_REMOVE_SUGGESTION_LINGER;
+import static android.net.wifi.WifiManager.LocalOnlyHotspotCallback.REQUEST_REGISTERED;
 import static android.net.wifi.WifiManager.WIFI_STATE_DISABLED;
 import static android.net.wifi.WifiManager.WIFI_STATE_ENABLED;
 
@@ -37,6 +40,7 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
 import android.net.wifi.IActionListener;
+import android.net.wifi.ILocalOnlyHotspotCallback;
 import android.net.wifi.IScoreUpdateObserver;
 import android.net.wifi.ISoftApCallback;
 import android.net.wifi.IWifiConnectedNetworkScorer;
@@ -57,6 +61,7 @@ import android.net.wifi.WifiSsid;
 import android.net.wifi.util.ScanResultUtil;
 import android.os.Binder;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.PatternMatcher;
 import android.os.Process;
 import android.os.RemoteException;
@@ -137,6 +142,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
             "set-verbose-logging",
             "set-wifi-enabled",
             "set-passpoint-enabled",
+            "set-multi-internet-state",
             "start-scan",
             "start-softap",
             "status",
@@ -156,7 +162,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
     private final WifiCountryCode mWifiCountryCode;
     private final WifiLastResortWatchdog mWifiLastResortWatchdog;
     private final WifiServiceImpl mWifiService;
-    private final Context mContext;
+    private final WifiContext mContext;
     private final ConnectivityManager mConnectivityManager;
     private final WifiCarrierInfoManager mWifiCarrierInfoManager;
     private final WifiNetworkFactory mWifiNetworkFactory;
@@ -165,6 +171,54 @@ public class WifiShellCommand extends BasicShellCommandHandler {
     private final WifiApConfigStore mWifiApConfigStore;
     private int mSapState = WifiManager.WIFI_STATE_UNKNOWN;
     private final ScanRequestProxy mScanRequestProxy;
+
+    private class SoftApCallbackProxy extends ISoftApCallback.Stub {
+        private final PrintWriter mPrintWriter;
+        private final CountDownLatch mCountDownLatch;
+
+        SoftApCallbackProxy(PrintWriter printWriter, CountDownLatch countDownLatch) {
+            mPrintWriter = printWriter;
+            mCountDownLatch = countDownLatch;
+        }
+
+        @Override
+        public void onStateChanged(int state, int failureReason) {
+            mPrintWriter.println("onStateChanged with state: " + state
+                    + " failure reason: " + failureReason);
+            mSapState = state;
+            if (state == WifiManager.WIFI_AP_STATE_ENABLED) {
+                mPrintWriter.println(" SAP is enabled successfully");
+                // Skip countDown() and wait for onInfoChanged() which has
+                // the confirmed softAp channel information
+            } else if (state == WifiManager.WIFI_AP_STATE_DISABLED) {
+                mPrintWriter.println(" SAP is disabled");
+            } else if (state == WifiManager.WIFI_AP_STATE_FAILED) {
+                mPrintWriter.println(" SAP failed to start");
+                mCountDownLatch.countDown();
+            }
+        }
+
+        @Override
+        public void onConnectedClientsOrInfoChanged(Map<String, SoftApInfo> infos,
+                Map<String, List<WifiClient>> clients, boolean isBridged,
+                boolean isRegistration) {
+            mPrintWriter.println("onConnectedClientsOrInfoChanged, infos: " + infos
+                    + ", clients: " + clients + ", isBridged: " + isBridged);
+            if (mSapState == WifiManager.WIFI_AP_STATE_ENABLED && infos.size() != 0) {
+                mCountDownLatch.countDown();
+            }
+        }
+
+        @Override
+        public void onCapabilityChanged(SoftApCapability capability) {
+            mPrintWriter.println("onCapabilityChanged " + capability);
+        }
+
+        @Override
+        public void onBlockedClientConnecting(WifiClient client, int reason) {
+        }
+    }
+
 
     /**
      * Used for shell command testing of scorer.
@@ -205,7 +259,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         }
     }
 
-    WifiShellCommand(WifiInjector wifiInjector, WifiServiceImpl wifiService, Context context,
+    WifiShellCommand(WifiInjector wifiInjector, WifiServiceImpl wifiService, WifiContext context,
             WifiGlobals wifiGlobals, WifiThreadRunner wifiThreadRunner) {
         mWifiGlobals = wifiGlobals;
         mWifiThreadRunner = wifiThreadRunner;
@@ -242,7 +296,6 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                                 + "(or such command doesn't exist)");
             }
         }
-
         final PrintWriter pw = getOutPrintWriter();
         try {
             switch (cmd) {
@@ -439,53 +492,64 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                         return 0;
                     }
                 }
+                case "start-lohs": {
+                    CountDownLatch countDownLatch = new CountDownLatch(2);
+                    SoftApConfiguration config = buildSoftApConfiguration(pw);
+                    ILocalOnlyHotspotCallback.Stub lohsCallback =
+                            new ILocalOnlyHotspotCallback.Stub() {
+                        @Override
+                        public void onHotspotStarted(SoftApConfiguration config) {
+                            pw.println("Lohs onStarted, config = " + config);
+                            countDownLatch.countDown();
+                        }
+
+                        @Override
+                        public void onHotspotStopped() {
+                            pw.println("Lohs onStopped");
+                            countDownLatch.countDown();
+                        }
+
+                        @Override
+                        public void onHotspotFailed(int reason) {
+                            pw.println("Lohs onFailed: " + reason);
+                            countDownLatch.countDown();
+                        }
+                    };
+                    SoftApCallbackProxy softApCallback =
+                            new SoftApCallbackProxy(pw, countDownLatch);
+                    Bundle extras = new Bundle();
+                    if (SdkLevel.isAtLeastS()) {
+                        extras.putParcelable(WifiManager.EXTRA_PARAM_KEY_ATTRIBUTION_SOURCE,
+                                mContext.getAttributionSource());
+                    }
+                    mWifiService.registerLocalOnlyHotspotSoftApCallback(softApCallback, extras);
+                    if (REQUEST_REGISTERED != mWifiService.startLocalOnlyHotspot(
+                              lohsCallback, SHELL_PACKAGE_NAME, null /* featureId */,
+                              config, extras)) {
+                        pw.println("Lohs failed to start. Please check config parameters");
+                    }
+                    // Wait for lohs to start and complete callback
+                    countDownLatch.await(10000, TimeUnit.MILLISECONDS);
+                    mWifiService.unregisterLocalOnlyHotspotSoftApCallback(softApCallback, extras);
+                    return 0;
+                }
                 case "start-softap": {
                     CountDownLatch countDownLatch = new CountDownLatch(1);
-                    ISoftApCallback.Stub softApCallback = new ISoftApCallback.Stub() {
-                        @Override
-                        public void onStateChanged(int state, int failureReason) {
-                            pw.println("onStateChanged with state: " + state
-                                    + " failure reason: " + failureReason);
-                            mSapState = state;
-                            if (state == WifiManager.WIFI_AP_STATE_ENABLED) {
-                                pw.println(" SAP is enabled successfully");
-                                // Skip countDown() and wait for onInfoChanged() which has
-                                // the confirmed softAp channel information
-                            } else if (state == WifiManager.WIFI_AP_STATE_DISABLED) {
-                                pw.println(" SAP is disabled");
-                            } else if (state == WifiManager.WIFI_AP_STATE_FAILED) {
-                                pw.println(" SAP failed to start");
-                                countDownLatch.countDown();
-                            }
-                        }
-
-                        @Override
-                        public void onConnectedClientsOrInfoChanged(Map<String, SoftApInfo> infos,
-                                Map<String, List<WifiClient>> clients, boolean isBridged,
-                                boolean isRegistration) {
-                            if (mSapState == WifiManager.WIFI_AP_STATE_ENABLED) {
-                                countDownLatch.countDown();
-                            }
-                        }
-
-                        @Override
-                        public void onCapabilityChanged(SoftApCapability capability) {
-                            pw.println("onCapabilityChanged " + capability);
-                        }
-
-                        @Override
-                        public void onBlockedClientConnecting(WifiClient client, int reason) {
-                        }
-
-                    };
-                    mWifiService.registerSoftApCallback(softApCallback);
                     SoftApConfiguration config = buildSoftApConfiguration(pw);
+                    SoftApCallbackProxy softApCallback =
+                            new SoftApCallbackProxy(pw, countDownLatch);
+                    mWifiService.registerSoftApCallback(softApCallback);
                     if (!mWifiService.startTetheredHotspot(config, SHELL_PACKAGE_NAME)) {
                         pw.println("Soft AP failed to start. Please check config parameters");
                     }
                     // Wait for softap to start and complete callback
-                    countDownLatch.await(3000, TimeUnit.MILLISECONDS);
+                    countDownLatch.await(10000, TimeUnit.MILLISECONDS);
                     mWifiService.unregisterSoftApCallback(softApCallback);
+                    return 0;
+                }
+                case "stop-lohs": {
+                    mWifiService.stopLocalOnlyHotspot();
+                    pw.println("Lohs stopped successfully");
                     return 0;
                 }
                 case "stop-softap": {
@@ -494,6 +558,10 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                     } else {
                         pw.println("Soft AP failed to stop");
                     }
+                    return 0;
+                }
+                case "reload-resources": {
+                    mContext.resetResourceCache();
                     return 0;
                 }
                 case "force-country-code": {
@@ -536,6 +604,11 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                 case "set-passpoint-enabled": {
                     boolean enabled = getNextArgRequiredTrueOrFalse("enabled", "disabled");
                     mWifiService.setWifiPasspointEnabled(enabled);
+                    return 0;
+                }
+                case "set-multi-internet-mode": {
+                    int mode = Integer.parseInt(getNextArgRequired());
+                    mWifiService.setStaConcurrencyForMultiInternetMode(mode);
                     return 0;
                 }
                 case "set-scan-always-available": {
@@ -747,6 +820,11 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                 }
                 case "remove-suggestion": {
                     String ssid = getNextArgRequired();
+                    String action = getNextArg();
+                    int actionCode = ACTION_REMOVE_SUGGESTION_DISCONNECT;
+                    if (action != null && action.equals("lingering")) {
+                        actionCode = ACTION_REMOVE_SUGGESTION_LINGER;
+                    }
                     List<WifiNetworkSuggestion> suggestions =
                             mWifiService.getNetworkSuggestions(SHELL_PACKAGE_NAME);
                     WifiNetworkSuggestion suggestion = suggestions.stream()
@@ -758,7 +836,7 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                         return -1;
                     }
                     mWifiService.removeNetworkSuggestions(
-                            Arrays.asList(suggestion), SHELL_PACKAGE_NAME);
+                            Arrays.asList(suggestion), SHELL_PACKAGE_NAME, actionCode);
                     // untrusted/oem-paid networks need a corresponding NetworkRequest.
                     if (suggestion.isUntrusted()
                             || (SdkLevel.isAtLeastS()
@@ -776,7 +854,8 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                 }
                 case "remove-all-suggestions":
                     mWifiService.removeNetworkSuggestions(
-                            Collections.emptyList(), SHELL_PACKAGE_NAME);
+                            Collections.emptyList(), SHELL_PACKAGE_NAME,
+                            WifiManager.ACTION_REMOVE_SUGGESTION_DISCONNECT);
                     return 0;
                 case "list-suggestions": {
                     List<WifiNetworkSuggestion> suggestions =
@@ -1097,10 +1176,10 @@ public class WifiShellCommand extends BasicShellCommandHandler {
     }
 
     private SoftApConfiguration buildSoftApConfiguration(PrintWriter pw) {
-        String ssid = getNextArgRequired();
+        String ssidStr = getNextArgRequired();
         String type = getNextArgRequired();
         SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder();
-        configBuilder.setSsid(ssid);
+        configBuilder.setSsid(ssidStr);
         if (TextUtils.equals(type, "wpa2")) {
             configBuilder.setPassphrase(getNextArgRequired(),
                     SoftApConfiguration.SECURITY_TYPE_WPA2_PSK);
@@ -1142,6 +1221,8 @@ public class WifiShellCommand extends BasicShellCommandHandler {
                 } else {
                     throw new IllegalArgumentException("Invalid band option " + preferredBand);
                 }
+            } else if (SdkLevel.isAtLeastT() && option.equals("-x")) {
+                configBuilder.setWifiSsid(WifiSsid.fromString(ssidStr));
             } else {
                 pw.println("Ignoring unknown option " + option);
             }
@@ -1239,38 +1320,58 @@ public class WifiShellCommand extends BasicShellCommandHandler {
     }
 
     private NetworkRequest buildNetworkRequest(PrintWriter pw) {
-        boolean isGlob = "-g".equals(getNextOption());
-        String ssid = getNextArgRequired();
-        String type = getNextArgRequired();
+        String firstOpt = getNextOption();
+        boolean isGlob = "-g".equals(firstOpt);
+        boolean noSsid = "-s".equals(firstOpt);
+        String ssid = noSsid ? null : getNextArgRequired();
+        String type = noSsid ? null : getNextArgRequired();
         WifiNetworkSpecifier.Builder specifierBuilder =
                 new WifiNetworkSpecifier.Builder();
         if (isGlob) {
             specifierBuilder.setSsidPattern(
                     new PatternMatcher(ssid, PatternMatcher.PATTERN_ADVANCED_GLOB));
         } else {
-            specifierBuilder.setSsid(ssid);
+            if (ssid != null) specifierBuilder.setSsid(ssid);
         }
-        if (TextUtils.equals(type, "wpa3")) {
-            specifierBuilder.setWpa3Passphrase(getNextArgRequired());
-        } else if (TextUtils.equals(type, "wpa3_transition")) {
-            specifierBuilder.setWpa3Passphrase(getNextArgRequired());
-        } else if (TextUtils.equals(type, "wpa2")) {
-            specifierBuilder.setWpa2Passphrase(getNextArgRequired());
-        } else if (TextUtils.equals(type, "owe")) {
-            specifierBuilder.setIsEnhancedOpen(true);
-        } else if (TextUtils.equals(type, "open")) {
-            // nothing to do.
-        } else {
-            throw new IllegalArgumentException("Unknown network type " + type);
+        if (type != null) {
+            if (TextUtils.equals(type, "wpa3")) {
+                specifierBuilder.setWpa3Passphrase(getNextArgRequired());
+            } else if (TextUtils.equals(type, "wpa3_transition")) {
+                specifierBuilder.setWpa3Passphrase(getNextArgRequired());
+            } else if (TextUtils.equals(type, "wpa2")) {
+                specifierBuilder.setWpa2Passphrase(getNextArgRequired());
+            } else if (TextUtils.equals(type, "owe")) {
+                specifierBuilder.setIsEnhancedOpen(true);
+            } else if (TextUtils.equals(type, "open")) {
+                // nothing to do.
+            } else {
+                throw new IllegalArgumentException("Unknown network type " + type);
+            }
         }
         String bssid = null;
         String option = getNextOption();
         boolean nullBssid = false;
+        boolean hasInternet = false;
         while (option != null) {
             if (option.equals("-b")) {
                 bssid = getNextArgRequired();
             } else if (option.equals("-n")) {
                 nullBssid = true;
+            } else if (option.equals("-d")) {
+                String band = getNextArgRequired();
+                if (band.equals("2")) {
+                    specifierBuilder.setBand(ScanResult.WIFI_BAND_24_GHZ);
+                } else if (band.equals("5")) {
+                    specifierBuilder.setBand(ScanResult.WIFI_BAND_5_GHZ);
+                } else if (band.equals("6")) {
+                    specifierBuilder.setBand(ScanResult.WIFI_BAND_6_GHZ);
+                } else if (band.equals("60")) {
+                    specifierBuilder.setBand(ScanResult.WIFI_BAND_60_GHZ);
+                } else {
+                    throw new IllegalArgumentException("Unknown band " + band);
+                }
+            } else if (option.equals("-i")) {
+                hasInternet = true;
             } else {
                 pw.println("Ignoring unknown option " + option);
             }
@@ -1297,11 +1398,14 @@ public class WifiShellCommand extends BasicShellCommandHandler {
             }
         }
         if (bssid != null && !nullBssid) specifierBuilder.setBssid(MacAddress.fromString(bssid));
-        return new NetworkRequest.Builder()
-                .addTransportType(TRANSPORT_WIFI)
-                .removeCapability(NET_CAPABILITY_INTERNET)
-                .setNetworkSpecifier(specifierBuilder.build())
-                .build();
+        NetworkRequest.Builder builder = new NetworkRequest.Builder()
+                .addTransportType(TRANSPORT_WIFI);
+        if (hasInternet) {
+            builder.addCapability(NET_CAPABILITY_INTERNET);
+        } else {
+            builder.removeCapability(NET_CAPABILITY_INTERNET);
+        }
+        return builder.setNetworkSpecifier(specifierBuilder.build()).build();
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
@@ -1359,8 +1463,13 @@ public class WifiShellCommand extends BasicShellCommandHandler {
     private void setAutoJoin(PrintWriter pw, String ssid, boolean allowAutojoin) {
         // For suggestions, this will work only if the config has already been added
         // to WifiConfigManager.
+        Bundle extras = new Bundle();
+        if (SdkLevel.isAtLeastS()) {
+            extras.putParcelable(WifiManager.EXTRA_PARAM_KEY_ATTRIBUTION_SOURCE,
+                    mContext.getAttributionSource());
+        }
         WifiConfiguration retrievedConfig =
-                mWifiService.getPrivilegedConfiguredNetworks(SHELL_PACKAGE_NAME, null)
+                mWifiService.getPrivilegedConfiguredNetworks(SHELL_PACKAGE_NAME, null, extras)
                         .getList()
                         .stream()
                         .filter(n -> n.SSID.equals(ssid))
@@ -1600,8 +1709,10 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("    -c <carrierId> - set carrier Id");
         pw.println("    -i <subscriptionId> - set subscription Id, if -a is used, "
                 + "this must be set");
-        pw.println("  remove-suggestion <ssid>");
+        pw.println("  remove-suggestion <ssid> [-l]");
         pw.println("    Remove a network suggestion with provided SSID of the network");
+        pw.println("    -l - Remove suggestion with lingering, if not set will disconnect "
+                + "immediately ");
         pw.println("  remove-all-suggestions");
         pw.println("    Removes all suggestions added via shell");
         pw.println("  list-suggestions");
@@ -1656,11 +1767,16 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("    Note: If the band option is not provided, 2.4GHz is the preferred band.");
         pw.println("          The exact channel is auto-selected by FW unless overridden by "
                 + "force-softap-channel command");
+        pw.println("    -x - Specifies the SSID as hex digits instead of plain text (T and above)");
         pw.println("  stop-softap");
         pw.println("    Stop softap (hotspot)");
         pw.println("  pmksa-flush <networkId>");
         pw.println("        - Flush the local PMKSA cache associated with the network id."
                 + " Use list-networks to retrieve <networkId> for the network");
+        pw.println("  reload-resources");
+        pw.println(
+                "    Reset the WiFi resources cache which will cause them to be reloaded next "
+                        + "time they are accessed. Necessary if overlays are manually modified.");
     }
 
     private void onHelpPrivileged(PrintWriter pw) {
@@ -1711,7 +1827,8 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("    each on a separate line.");
         pw.println("  settings-reset");
         pw.println("    Initiates wifi settings reset");
-        pw.println("  add-request [-g] <ssid> open|owe|wpa2|wpa3 [<passphrase>] [-b <bssid>] [-n]");
+        pw.println("  add-request [-g] [-i] [-n] [-s] <ssid> open|owe|wpa2|wpa3 [<passphrase>]"
+                + " [-b <bssid>] [-d <band=2|5|6|60>]");
         pw.println("    Add a network request with provided params");
         pw.println("    Use 'network-requests-set-user-approved android yes'"
                 +  " to pre-approve requests added via rooted shell (Not persisted)");
@@ -1725,6 +1842,9 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("           - 'wpa2' - WPA-2 PSK networks (Most prevalent)");
         pw.println("           - 'wpa3' - WPA-3 PSK networks");
         pw.println("    -b <bssid> - Set specific BSSID.");
+        pw.println("    -i Set internet capability.");
+        pw.println("    -d Specify the band of access point: 2, 5, 6, or 60");
+        pw.println("    -s No SSID provided, to be chosen by network selection.");
         pw.println("    -n - Prevent auto-selection of BSSID and force it to be null so that the "
                 + "request matches all BSSIDs.");
         pw.println("  remove-request <ssid>");
@@ -1794,6 +1914,25 @@ public class WifiShellCommand extends BasicShellCommandHandler {
         pw.println("    -h - Enable scanning for hidden networks.");
         pw.println("  set-passpoint-enabled enabled|disabled");
         pw.println("    Sets whether Passpoint should be enabled or disabled");
+        pw.println("  start-lohs <ssid> (open|wpa2|wpa3|wpa3_transition) <passphrase> "
+                + "[-b 2|5|6|any]");
+        pw.println("    Start local only softap (hotspot) with provided params");
+        pw.println("    <ssid> - SSID of the network");
+        pw.println("    open|wpa2|wpa3|wpa3_transition - Security type of the network.");
+        pw.println("        - Use 'open' for networks with no passphrase");
+        pw.println("        - Use 'wpa2', 'wpa3', 'wpa3_transition' for networks with passphrase");
+        pw.println("    -b 2|5|6|any|bridged - select the preferred band.");
+        pw.println("        - Use '2' to select 2.4GHz band as the preferred band");
+        pw.println("        - Use '5' to select 5GHz band as the preferred band");
+        pw.println("        - Use '6' to select 6GHz band as the preferred band");
+        pw.println("        - Use 'any' to indicate no band preference");
+        pw.println("        - Use 'bridged' to indicate bridged AP which enables APs on both "
+                + "2.4G + 5G");
+        pw.println("    Note: If the band option is not provided, 2.4GHz is the preferred band.");
+        pw.println("  stop-lohs");
+        pw.println("    Stop local only softap (hotspot)");
+        pw.println("  set-multi-internet-mode 0|1|2");
+        pw.println("    Sets Multi Internet use case mode. 0-disabled 1-dbs 2-multi ap");
     }
 
     @Override

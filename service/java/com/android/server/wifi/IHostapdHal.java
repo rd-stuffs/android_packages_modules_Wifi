@@ -20,7 +20,7 @@ import android.net.MacAddress;
 import android.net.wifi.SoftApConfiguration;
 
 import com.android.server.wifi.WifiNative.HostapdDeathEventHandler;
-import com.android.server.wifi.WifiNative.SoftApListener;
+import com.android.server.wifi.WifiNative.SoftApHalCallback;
 
 import java.io.PrintWriter;
 
@@ -42,9 +42,10 @@ interface IHostapdHal {
     /**
      * Enable/Disable verbose logging.
      *
-     * @param enable true to enable, false to disable.
+     * @param verboseEnabled true to enable, false to disable.
+     * @param halVerboseEnabled true to enable hal verbose logging, false to disable.
      */
-    void enableVerboseLogging(boolean enable);
+    void enableVerboseLogging(boolean verboseEnabled, boolean halVerboseEnabled);
 
     /**
      * Add and start a new access point.
@@ -85,11 +86,11 @@ interface IHostapdHal {
      * registrations.
      *
      * @param ifaceName Name of the interface.
-     * @param listener Callback listener for AP events.
+     * @param callback Callback listener for AP events.
      * @return true on success, false on failure.
      */
     boolean registerApCallback(@NonNull String ifaceName,
-            @NonNull SoftApListener listener);
+            @NonNull SoftApHalCallback callback);
 
     /**
      * Returns whether or not the hostapd supports getting the AP info from the callback.
@@ -127,4 +128,26 @@ interface IHostapdHal {
      * Dump information about the specific implementation.
      */
     void dump(PrintWriter pw);
+
+    /**
+     * Check if needs to use hostapd vendor service.
+     * @return
+     */
+    default boolean useVendorHostapdHal() {
+        return false;
+    }
+
+    /**
+     * Add and start a new vendor access point.
+     *
+     * @param ifaceName Name of the softap interface.
+     * @param config Configuration to use for the AP.
+     * @param onFailureListener A runnable to be triggered on failure.
+     * @return true on success, false otherwise.
+     */
+    default boolean addVendorAccessPoint(@NonNull String ifaceName,
+            @NonNull SoftApConfiguration config,
+            Runnable onFailureListener) {
+        return false;
+    }
 }

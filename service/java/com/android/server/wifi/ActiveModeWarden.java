@@ -454,7 +454,9 @@ public class ActiveModeWarden {
         }
         if (clientRole == ROLE_CLIENT_SECONDARY_LONG_LIVED) {
             return mContext.getResources().getBoolean(
-                    R.bool.config_wifiMultiStaRestrictedConcurrencyEnabled);
+                    R.bool.config_wifiMultiStaRestrictedConcurrencyEnabled)
+                    || mContext.getResources().getBoolean(
+                    R.bool.config_wifiMultiStaMultiInternetConcurrencyEnabled);
         }
         Log.e(TAG, "Unrecognized role=" + clientRole);
         return false;
@@ -503,6 +505,16 @@ public class ActiveModeWarden {
         return mWifiNative.isStaStaConcurrencySupported()
                 && mContext.getResources().getBoolean(
                         R.bool.config_wifiMultiStaRestrictedConcurrencyEnabled);
+    }
+
+    /**
+     * @return Returns whether the device can support at least two concurrent client mode managers
+     * and the multi internet use-case is enabled.
+     */
+    public boolean isStaStaConcurrencySupportedForMultiInternet() {
+        return mWifiNative.isStaStaConcurrencySupported()
+                && mContext.getResources().getBoolean(
+                        R.bool.config_wifiMultiStaMultiInternetConcurrencyEnabled);
     }
 
     /** Begin listening to broadcasts and start the internal state machine. */
@@ -642,8 +654,8 @@ public class ActiveModeWarden {
     }
 
     /** Update SoftAp Capability. */
-    public void updateSoftApCapability(SoftApCapability capability) {
-        mWifiController.sendMessage(WifiController.CMD_UPDATE_AP_CAPABILITY, capability);
+    public void updateSoftApCapability(SoftApCapability capability, int ipMode) {
+        mWifiController.sendMessage(WifiController.CMD_UPDATE_AP_CAPABILITY, ipMode, 0, capability);
     }
 
     /** Update SoftAp Configuration. */
@@ -779,6 +791,14 @@ public class ActiveModeWarden {
     }
 
     /**
+     * Checks if a CMM can be started for MBB.
+     */
+    public boolean canRequestSecondaryTransientClientModeManager() {
+        return canRequestMoreClientModeManagersInRole(INTERNAL_REQUESTOR_WS,
+                ROLE_CLIENT_SECONDARY_TRANSIENT);
+    }
+
+    /**
      * Remove the provided client manager.
      */
     public void removeClientModeManager(ClientModeManager clientModeManager) {
@@ -791,6 +811,15 @@ public class ActiveModeWarden {
      */
     public boolean hasPrimaryClientModeManager() {
         return getClientModeManagerInRole(ROLE_CLIENT_PRIMARY) != null;
+    }
+
+    /**
+     * Checks whether there exists a primary or scan only mode manager.
+     * @return
+     */
+    private boolean hasPrimaryOrScanOnlyModeManager() {
+        return getClientModeManagerInRole(ROLE_CLIENT_PRIMARY) != null
+                || getClientModeManagerInRole(ROLE_CLIENT_SCAN_ONLY) != null;
     }
 
     /**
@@ -991,9 +1020,11 @@ public class ActiveModeWarden {
         }
     }
 
-    private void updateCapabilityToSoftApModeManager(SoftApCapability capability) {
+    private void updateCapabilityToSoftApModeManager(SoftApCapability capability, int ipMode) {
         for (SoftApManager softApManager : mSoftApManagers) {
-            softApManager.updateCapability(capability);
+            if (ipMode == softApManager.getSoftApModeConfiguration().getTargetMode()) {
+                softApManager.updateCapability(capability);
+            }
         }
     }
 
@@ -1193,6 +1224,9 @@ public class ActiveModeWarden {
             pw.println("   Restricted use-case enabled: "
                     + mContext.getResources().getBoolean(
                             R.bool.config_wifiMultiStaRestrictedConcurrencyEnabled));
+            pw.println("   Multi internet use-case enabled: "
+                    + mContext.getResources().getBoolean(
+                            R.bool.config_wifiMultiStaMultiInternetConcurrencyEnabled));
         }
         pw.println("STA + AP Concurrency Supported: " + isStaApConcurrencySupported());
         mWifiInjector.getHalDeviceManager().dump(fd, pw, args);
@@ -1800,7 +1834,7 @@ public class ActiveModeWarden {
                         }
                         break;
                     case CMD_UPDATE_AP_CAPABILITY:
-                        updateCapabilityToSoftApModeManager((SoftApCapability) msg.obj);
+                        updateCapabilityToSoftApModeManager((SoftApCapability) msg.obj, msg.arg1);
                         break;
                     case CMD_UPDATE_AP_CONFIG:
                         updateConfigurationToSoftApModeManager((SoftApConfiguration) msg.obj);
@@ -1831,7 +1865,7 @@ public class ActiveModeWarden {
 
         private void handleStaToggleChangeInEnabledState(WorkSource requestorWs) {
             if (shouldEnableSta()) {
-                if (hasAnyClientModeManager()) {
+                if (hasPrimaryOrScanOnlyModeManager()) {
                     if (!mSettingsStore.isWifiToggleEnabled()) {
                         // Wifi is turned off, so we should stop all the secondary CMMs which are
                         // currently all for connectivity purpose. It's important to stops the
@@ -2062,6 +2096,21 @@ public class ActiveModeWarden {
                             requestInfo.listener, requestInfo.requestorWs);
                     return;
                 }
+
+                // fallback decision
+                if (requestInfo.clientRole == ROLE_CLIENT_LOCAL_ONLY
+                        && mContext.getResources().getBoolean(
+                        R.bool.config_wifiMultiStaLocalOnlyConcurrencyEnabled)
+                        && !mWifiPermissionsUtil.isTargetSdkLessThan(
+                        requestInfo.requestorWs.getPackageName(0), Build.VERSION_CODES.S,
+                        requestInfo.requestorWs.getUid(0))) {
+                    Log.d(TAG, "Will not fall back to single STA for a local-only connection when "
+                            + "STA+STA is supported (unless for a pre-S legacy app). "
+                            + " Priority inversion.");
+                    requestInfo.listener.onAnswer(null);
+                    return;
+                }
+
                 // Fall back to single STA behavior.
                 Log.v(TAG, "Falling back to single STA behavior using primary ClientModeManager="
                         + primaryManager);

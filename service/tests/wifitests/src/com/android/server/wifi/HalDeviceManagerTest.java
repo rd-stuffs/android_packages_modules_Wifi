@@ -363,7 +363,7 @@ public class HalDeviceManagerTest extends WifiBaseTest {
 
         // verify: service and callback calls
         mInOrder.verify(mWifiMock).start();
-        mInOrder.verify(mManagerStatusListenerMock).onStatusChanged();
+        mInOrder.verify(mManagerStatusListenerMock, times(2)).onStatusChanged();
 
         verifyNoMoreInteractions(mManagerStatusListenerMock);
     }
@@ -985,7 +985,7 @@ public class HalDeviceManagerTest extends WifiBaseTest {
 
         // Verify a runnable is posted because current thread is different than the intended thread
         // for running "onDestroyed"
-        verify(staIfaceOnDestroyedHandler).post(lambdaCaptor.capture());
+        verify(staIfaceOnDestroyedHandler).postAtFrontOfQueue(lambdaCaptor.capture());
 
         // Verify onDestroyed is only run after the posted runnable is dispatched
         verify(staIdl, never()).onDestroyed("wlan0");
@@ -1012,7 +1012,7 @@ public class HalDeviceManagerTest extends WifiBaseTest {
         simulateStartAndStopWifi(staIdl, staIfaceOnDestroyedHandler);
 
         // Verify a runnable is never posted
-        verify(staIfaceOnDestroyedHandler, never()).post(any());
+        verify(staIfaceOnDestroyedHandler, never()).postAtFrontOfQueue(any());
         // Verify onDestroyed is triggered directly
         verify(staIdl).onDestroyed("wlan0");
     }
@@ -1645,7 +1645,7 @@ public class HalDeviceManagerTest extends WifiBaseTest {
                 TEST_WORKSOURCE_2, // requestorWs
                 // destroyedInterfacesDestroyedListeners...
                 new InterfaceDestroyedListenerWithIfaceName(
-                        getName(staIface), staDestroyedListener)
+                        getName(staIface2), staDestroyedListener2)
         );
         collector.checkThat("AP interface wasn't created", apIface, IsNull.notNullValue());
 
@@ -2057,12 +2057,12 @@ public class HalDeviceManagerTest extends WifiBaseTest {
                 nanDestroyedListener, // destroyedListener
                 TEST_WORKSOURCE_2, // requestorWs
                 new InterfaceDestroyedListenerWithIfaceName(
-                        getName(staIface), staDestroyedListener)
+                        getName(staIface2), staDestroyedListener2)
         );
         collector.checkThat("NAN interface wasn't created", nanIface, IsNull.notNullValue());
 
-        verify(chipMock.chip).removeStaIface("wlan0");
-        verify(staDestroyedListener).onDestroyed(getName(staIface));
+        verify(chipMock.chip).removeStaIface("wlan1");
+        verify(staDestroyedListener2).onDestroyed(getName(staIface2));
 
         // request STA2 (foreground app): should fail
         when(mWorkSourceHelper1.hasAnySystemAppRequest()).thenReturn(false);

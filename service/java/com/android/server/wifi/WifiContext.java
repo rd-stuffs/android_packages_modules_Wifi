@@ -146,4 +146,18 @@ public class WifiContext extends ContextWrapper {
     public String getServiceWifiPackageName() {
         return SERVICE_WIFI_PACKAGE_NAME;
     }
+
+    /**
+     * Reset the resource cache which will cause it to be reloaded next time it is accessed.
+     */
+    public void resetResourceCache() {
+        mWifiOverlayApkPkgName = null;
+        mWifiAssetsFromApk = null;
+        mWifiResourcesFromApk = null;
+        mWifiThemeFromApk = null;
+    }
+
+    WifiStringResourceWrapper getStringResourceWrapper(int subId, int carrierId) {
+        return new WifiStringResourceWrapper(this, subId, carrierId);
+    }
 }

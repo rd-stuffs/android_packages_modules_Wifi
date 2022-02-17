@@ -47,6 +47,7 @@ import android.net.wifi.WifiNetworkSuggestion;
 import android.net.wifi.hotspot2.IProvisioningCallback;
 import android.net.wifi.hotspot2.OsuProvider;
 import android.net.wifi.hotspot2.PasspointConfiguration;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.RemoteException;
 import android.os.WorkSource;
@@ -100,13 +101,35 @@ public class BaseWifiService extends IWifiManager.Stub {
     }
 
     @Override
-    public ParceledListSlice getPrivilegedConfiguredNetworks(String packageName, String featureId) {
+    public ParceledListSlice getPrivilegedConfiguredNetworks(String packageName, String featureId,
+            Bundle extras) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public WifiConfiguration getPrivilegedConnectedNetwork(
+            String packageName, String featureId, Bundle extras) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void setScreenOnScanSchedule(int[] scanSchedule, int[] scanType) {
         throw new UnsupportedOperationException();
     }
 
     @Override
     public Map<String, Map<Integer, List<ScanResult>>> getAllMatchingFqdnsForScanResults(
             List<ScanResult> scanResults) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void setSsidsDoNotBlocklist(String packageName, List<WifiSsid> ssids) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public List<WifiSsid> getSsidsDoNotBlocklist(String packageName) {
         throw new UnsupportedOperationException();
     }
 
@@ -278,7 +301,7 @@ public class BaseWifiService extends IWifiManager.Stub {
     }
 
     @Override
-    public String getCountryCode() {
+    public String getCountryCode(String packageName, String featureId) {
         throw new UnsupportedOperationException();
     }
 
@@ -419,12 +442,22 @@ public class BaseWifiService extends IWifiManager.Stub {
 
     @Override
     public int startLocalOnlyHotspot(ILocalOnlyHotspotCallback callback, String packageName,
-            String featureId, SoftApConfiguration customConfig) {
+            String featureId, SoftApConfiguration customConfig, Bundle extras) {
         throw new UnsupportedOperationException();
     }
 
     @Override
     public void stopLocalOnlyHotspot() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void registerLocalOnlyHotspotSoftApCallback(ISoftApCallback callback, Bundle extras) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void unregisterLocalOnlyHotspotSoftApCallback(ISoftApCallback callback, Bundle extras) {
         throw new UnsupportedOperationException();
     }
 
@@ -589,6 +622,14 @@ public class BaseWifiService extends IWifiManager.Stub {
     }
 
     @Override
+    public int removeNetworkSuggestions(
+            List<WifiNetworkSuggestion> networkSuggestions, String callingPackageName, int action) {
+        throw new UnsupportedOperationException();
+    }
+    /**
+     * @deprecated Replaced by {@link #removeNetworkSuggestions(List, String, int)}
+     */
+    @Deprecated
     public int removeNetworkSuggestions(
             List<WifiNetworkSuggestion> networkSuggestions, String callingPackageName) {
         throw new UnsupportedOperationException();
@@ -832,6 +873,17 @@ public class BaseWifiService extends IWifiManager.Stub {
 
     @Override
     public void setWifiPasspointEnabled(boolean enabled) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public @WifiManager.WifiMultiInternetMode int getStaConcurrencyForMultiInternetMode() {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean setStaConcurrencyForMultiInternetMode(
+            @WifiManager.WifiMultiInternetMode int mode) {
         throw new UnsupportedOperationException();
     }
 }

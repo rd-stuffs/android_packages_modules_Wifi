@@ -23,6 +23,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.junit.Assume.assumeTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyBoolean;
 import static org.mockito.Mockito.anyInt;
@@ -75,6 +76,7 @@ import android.util.Pair;
 import androidx.test.filters.SmallTest;
 
 import com.android.dx.mockito.inline.extended.ExtendedMockito;
+import com.android.modules.utils.build.SdkLevel;
 import com.android.server.wifi.WifiScoreCard.PerNetwork;
 import com.android.server.wifi.proto.nano.WifiMetricsProto.UserActionEvent;
 import com.android.server.wifi.util.LruConnectionTracker;
@@ -286,6 +288,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         when(mWifiPermissionsUtil.isProfileOwner(anyInt(), any())).thenReturn(false);
         when(mWifiPermissionsUtil.doesUidBelongToCurrentUserOrDeviceOwner(anyInt()))
                 .thenReturn(true);
+        when(mWifiPermissionsUtil.isDeviceInDemoMode(any())).thenReturn(false);
         when(mWifiLastResortWatchdog.shouldIgnoreSsidUpdate()).thenReturn(false);
         when(mMacAddressUtil.calculatePersistentMac(any(), any())).thenReturn(TEST_RANDOMIZED_MAC);
         when(mWifiScoreCard.lookupNetwork(any())).thenReturn(mPerNetwork);
@@ -323,6 +326,10 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     private void mockIsDeviceOwner(boolean result) {
         when(mWifiPermissionsUtil.isDeviceOwner(anyInt(), any())).thenReturn(result);
         when(mWifiPermissionsUtil.isDeviceOwner(anyInt())).thenReturn(result);
+    }
+
+    private void mockIsAdmin(boolean result) {
+        when(mWifiPermissionsUtil.isAdmin(anyInt(), any())).thenReturn(result);
     }
 
     /**
@@ -753,7 +760,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
 
     /**
      * Verifies that the device owner could modify other other fields in the Wificonfiguration
-     * but not the macRandomizationSetting field.
+     * but not the macRandomizationSetting field for networks they do not own.
      */
     @Test
     public void testCannotUpdateMacRandomizationSettingWithoutPermission() {
@@ -779,6 +786,42 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         openNetwork.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
         networkUpdateResult = updateNetworkToWifiConfigManager(openNetwork);
         assertEquals(WifiConfiguration.INVALID_NETWORK_ID, networkUpdateResult.getNetworkId());
+    }
+
+    /**
+     * Verifies that the admin could set and modify the macRandomizationSetting field
+     * for networks they own.
+     */
+    @Test
+    public void testCanUpdateMacRandomizationSettingForAdminNetwork() {
+        assumeTrue(SdkLevel.isAtLeastT());
+        ArgumentCaptor<WifiConfiguration> wifiConfigCaptor =
+                ArgumentCaptor.forClass(WifiConfiguration.class);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.checkNetworkSetupWizardPermission(anyInt())).thenReturn(false);
+        mockIsDeviceOwner(true);
+        mockIsAdmin(true);
+        WifiConfiguration openNetwork = WifiConfigurationTestUtil.createOpenNetwork();
+        openNetwork.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
+
+        verifyAddNetworkToWifiConfigManager(openNetwork);
+        verify(mWcmListener).onNetworkAdded(wifiConfigCaptor.capture());
+        assertEquals(openNetwork.networkId, wifiConfigCaptor.getValue().networkId);
+        assertEquals(wifiConfigCaptor.getValue().macRandomizationSetting,
+                WifiConfiguration.RANDOMIZATION_NONE);
+        reset(mWcmListener);
+
+        // Change macRandomizationSetting for the network and verify success
+        openNetwork.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_AUTO;
+        NetworkUpdateResult networkUpdateResult =
+                mWifiConfigManager.addOrUpdateNetwork(openNetwork, TEST_CREATOR_UID);
+        assertNotEquals(WifiConfiguration.INVALID_NETWORK_ID, networkUpdateResult.getNetworkId());
+        verify(mWcmListener).onNetworkUpdated(
+                wifiConfigCaptor.capture(), wifiConfigCaptor.capture());
+        WifiConfiguration newConfig = wifiConfigCaptor.getAllValues().get(1);
+        assertEquals(WifiConfiguration.RANDOMIZATION_AUTO, newConfig.macRandomizationSetting);
+        assertEquals(openNetwork.networkId, newConfig.networkId);
+        reset(mWcmListener);
     }
 
     /**
@@ -825,7 +868,6 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 ArgumentCaptor.forClass(WifiConfiguration.class);
         when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(false);
         when(mWifiPermissionsUtil.checkNetworkSetupWizardPermission(anyInt())).thenReturn(true);
-        mockIsDeviceOwner(true);
         WifiConfiguration openNetwork = WifiConfigurationTestUtil.createOpenNetwork();
         openNetwork.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_AUTO;
         List<WifiConfiguration> networks = new ArrayList<>();
@@ -848,6 +890,25 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     }
 
     /**
+     * Verifies that mac randomization settings could be disabled by a caller when
+     * demo mode is enabled.
+     */
+    @Test
+    public void testCanAddConfigWithDisabledMacRandomizationWhenInDemoMode() {
+        ArgumentCaptor<WifiConfiguration> wifiConfigCaptor =
+                ArgumentCaptor.forClass(WifiConfiguration.class);
+        when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.checkNetworkSetupWizardPermission(anyInt())).thenReturn(false);
+        when(mWifiPermissionsUtil.isDeviceInDemoMode(any())).thenReturn(true);
+        WifiConfiguration openNetwork = WifiConfigurationTestUtil.createOpenNetwork();
+        openNetwork.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
+
+        verifyAddNetworkToWifiConfigManager(openNetwork);
+        verify(mWcmListener).onNetworkAdded(wifiConfigCaptor.capture());
+        assertEquals(openNetwork.networkId, wifiConfigCaptor.getValue().networkId);
+    }
+
+    /**
      * Verify that the mac randomization setting could be modified by the creator of a passpoint
      * network.
      */
@@ -857,7 +918,6 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 ArgumentCaptor.forClass(WifiConfiguration.class);
         when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(false);
         when(mWifiPermissionsUtil.checkNetworkSetupWizardPermission(anyInt())).thenReturn(false);
-        mockIsDeviceOwner(false);
         WifiConfiguration passpointNetwork = WifiConfigurationTestUtil.createPasspointNetwork();
         // Disable MAC randomization and verify this is added in successfully.
         passpointNetwork.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
@@ -1897,8 +1957,8 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         ScanDetail eapSuiteBNetworkScanDetail = createScanDetailForNetwork(eapSuiteBNetwork);
 
         // Now mix and match parameters from different scan details.
-        openNetworkScanDetail.getScanResult().SSID =
-                wepNetworkScanDetail.getScanResult().SSID;
+        openNetworkScanDetail.getScanResult().setWifiSsid(
+                wepNetworkScanDetail.getScanResult().getWifiSsid());
         wepNetworkScanDetail.getScanResult().capabilities =
                 pskNetworkScanDetail.getScanResult().capabilities;
         pskNetworkScanDetail.getScanResult().capabilities =
@@ -6539,6 +6599,9 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         int baseSecurityType = baseConfig.getDefaultSecurityParams().getSecurityType();
         int upgradableSecurityType = upgradableConfig.getDefaultSecurityParams().getSecurityType();
 
+        // The source guarantees that base configuration has necessary auto-upgrade type.
+        WifiConfigurationUtil.addUpgradableSecurityTypeIfNecessary(baseConfig);
+
         // Set up the store data.
         List<WifiConfiguration> sharedNetworks = new ArrayList<WifiConfiguration>() {
             {
@@ -7130,5 +7193,61 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         config.networkId = result.getNetworkId();
         NetworkUpdateResult updateResult = addNetworkToWifiConfigManager(config);
         assertTrue(result.getNetworkId() == updateResult.getNetworkId());
+    }
+
+    private WifiConfiguration prepareTofuEapConfig(int eapMethod, int phase2Method) {
+        WifiConfiguration config = new WifiConfiguration();
+        config.SSID = "\"TofuSsid\"";
+        config.setSecurityParams(WifiConfiguration.SECURITY_TYPE_EAP);
+        config.enterpriseConfig.setEapMethod(eapMethod);
+        config.enterpriseConfig.setPhase2Method(phase2Method);
+        config.enterpriseConfig.enableTrustOnFirstUse(true);
+        return config;
+    }
+
+    private void verifyAddTofuEnterpriseConfig(boolean isTofuSupported) {
+        long featureSet = isTofuSupported ? WifiManager.WIFI_FEATURE_TRUST_ON_FIRST_USE : 0L;
+        when(mPrimaryClientModeManager.getSupportedFeatures()).thenReturn(featureSet);
+
+        WifiConfiguration config = prepareTofuEapConfig(
+                WifiEnterpriseConfig.Eap.PEAP, WifiEnterpriseConfig.Phase2.NONE);
+        NetworkUpdateResult result = addNetworkToWifiConfigManager(config);
+        if (isTofuSupported) {
+            assertTrue(result.getNetworkId() != WifiConfiguration.INVALID_NETWORK_ID);
+        } else {
+            assertEquals(WifiConfiguration.INVALID_NETWORK_ID,
+                    WifiConfiguration.INVALID_NETWORK_ID);
+        }
+
+        // The config uses EAP-SIM type which does not use Server Cert.
+        config = prepareTofuEapConfig(
+                WifiEnterpriseConfig.Eap.SIM, WifiEnterpriseConfig.Phase2.NONE);
+        config.enterpriseConfig.enableTrustOnFirstUse(true);
+        result = addNetworkToWifiConfigManager(config);
+        assertEquals(WifiConfiguration.INVALID_NETWORK_ID, result.getNetworkId());
+
+        // The config alraedy has Root CA cert.
+        config = prepareTofuEapConfig(
+                WifiEnterpriseConfig.Eap.PEAP, WifiEnterpriseConfig.Phase2.NONE);
+        config.enterpriseConfig.setCaPath("/path/to/ca");
+        config.enterpriseConfig.enableTrustOnFirstUse(true);
+        result = addNetworkToWifiConfigManager(config);
+        assertEquals(WifiConfiguration.INVALID_NETWORK_ID, result.getNetworkId());
+    }
+
+    /**
+     * Verifies the addition of a network with Trust On First Use support.
+     */
+    @Test
+    public void testAddTofuEnterpriseConfigWithTofuSupport() {
+        verifyAddTofuEnterpriseConfig(true);
+    }
+
+    /**
+     * Verifies the addition of a network without Trust On First Use support.
+     */
+    @Test
+    public void testAddTofuEnterpriseConfigWithoutTofuSupport() {
+        verifyAddTofuEnterpriseConfig(false);
     }
 }

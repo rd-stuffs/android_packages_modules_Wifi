@@ -30,6 +30,7 @@ import android.net.NetworkRequest;
 import android.net.wifi.hotspot2.PasspointConfiguration;
 import android.os.Build;
 import android.os.Parcel;
+import android.os.ParcelUuid;
 import android.os.Parcelable;
 import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
@@ -226,6 +227,18 @@ public final class WifiNetworkSuggestion implements Parcelable {
          */
         private boolean mSaeH2eOnlyMode;
 
+        /**
+         * Whether this network will be brought up as restricted
+         */
+        private boolean mIsNetworkRestricted;
+
+
+        /**
+         * The Subscription group UUID identifies the SIM cards for which this network configuration
+         * is valid.
+         */
+        private ParcelUuid mSubscriptionGroup;
+
         public Builder() {
             mSsid = null;
             mBssid =  null;
@@ -254,6 +267,8 @@ public final class WifiNetworkSuggestion implements Parcelable {
             mMacRandomizationSetting = RANDOMIZATION_PERSISTENT;
             mSubscriptionId = SubscriptionManager.INVALID_SUBSCRIPTION_ID;
             mSaeH2eOnlyMode = false;
+            mIsNetworkRestricted = false;
+            mSubscriptionGroup = null;
         }
 
         /**
@@ -505,6 +520,9 @@ public final class WifiNetworkSuggestion implements Parcelable {
          * suggestion to be rejected with the error code
          * {@link WifiManager#STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_NOT_ALLOWED}.
          *
+         * Only one of the {@link #setSubscriptionGroup(ParcelUuid)} and
+         * {@link #setSubscriptionId(int)} should be called for a suggestion.
+         *
          * @param subscriptionId subscription ID see {@link SubscriptionInfo#getSubscriptionId()}
          * @return Instance of {@link Builder} to enable chaining of the builder method.
          * @throws IllegalArgumentException if subscriptionId equals to {@link SubscriptionManager#INVALID_SUBSCRIPTION_ID}
@@ -518,6 +536,41 @@ public final class WifiNetworkSuggestion implements Parcelable {
                 throw new IllegalArgumentException("Subscription Id is invalid");
             }
             mSubscriptionId = subscriptionId;
+            return this;
+        }
+
+        /**
+         * Configure the suggestion to only be used with the SIMs that belong to the Subscription
+         * Group specified in this method. The suggested network will only be used by the SIM in
+         * this Subscription Group and no other SIMs - even from the same carrier.
+         * <p>
+         * The caller is restricted to be either of:
+         * <li>A carrier provisioning app.
+         * <li>A carrier-privileged app - which is restricted to only specify a subscription ID
+         * which belong to the same carrier which signed the app, see
+         * {@link TelephonyManager#hasCarrierPrivileges()}.
+         * <p>
+         * Specifying a subscription group which doesn't match these restriction will cause the
+         * suggestion to be rejected with the error code
+         * {@link WifiManager#STATUS_NETWORK_SUGGESTIONS_ERROR_ADD_NOT_ALLOWED}.
+         *
+         * Only one of the {@link #setSubscriptionGroup(ParcelUuid)} and
+         * {@link #setSubscriptionId(int)} should be called for a suggestion.
+         *
+         * @param groupUuid Subscription group UUID see
+         * {@link SubscriptionManager#createSubscriptionGroup(List)}
+         * @return Instance of {@link Builder} to enable chaining of the builder method.
+         * @throws IllegalArgumentException if group UUID is {@code null}.
+         */
+        @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+        public @NonNull Builder setSubscriptionGroup(@NonNull ParcelUuid groupUuid) {
+            if (!SdkLevel.isAtLeastT()) {
+                throw new UnsupportedOperationException();
+            }
+            if (groupUuid == null) {
+                throw new IllegalArgumentException("SubscriptionGroup is invalid");
+            }
+            mSubscriptionGroup = groupUuid;
             return this;
         }
 
@@ -760,6 +813,30 @@ public final class WifiNetworkSuggestion implements Parcelable {
         }
 
         /**
+         * Specifies whether the system will bring up the network (if selected) as restricted. A
+         * restricted network has its {@link NetworkCapabilities#NET_CAPABILITY_NOT_RESTRICTED}
+         * capability removed. The Wi-Fi network selection process may use this information to
+         * influence priority of the suggested network for Wi-Fi network selection (most likely to
+         * reduce it). The connectivity service may use this information to influence the overall
+         * network configuration of the device.
+         * <p>
+         * <li> These suggestions are only considered for network selection if a
+         * {@link NetworkRequest} without {@link NetworkCapabilities#NET_CAPABILITY_NOT_RESTRICTED}
+         * capability is filed.
+         * <li> A restricted network's credentials may not be shared with the user using
+         * {@link #setCredentialSharedWithUser(boolean)}.</li>
+         * <li> If not set, defaults to false (i.e. network is unrestricted).</li>
+         *
+         * @param isRestricted Boolean indicating whether the network should be brought up
+         *                     restricted (if true) or unrestricted (if false).
+         * @return Instance of {@link Builder} to enable chaining of the builder method.
+         */
+        public @NonNull Builder setRestricted(boolean isRestricted) {
+            mIsNetworkRestricted = isRestricted;
+            return this;
+        }
+
+        /**
          * Specifies whether the system will bring up the network (if selected) as OEM paid. An
          * OEM paid network has {@link NetworkCapabilities#NET_CAPABILITY_OEM_PAID} capability
          * added.
@@ -976,6 +1053,8 @@ public final class WifiNetworkSuggestion implements Parcelable {
                     ? WifiConfiguration.RANDOMIZATION_NON_PERSISTENT
                     : WifiConfiguration.RANDOMIZATION_PERSISTENT;
             wifiConfiguration.subscriptionId = mSubscriptionId;
+            wifiConfiguration.restricted = mIsNetworkRestricted;
+            wifiConfiguration.setSubscriptionGroup(mSubscriptionGroup);
             return wifiConfiguration;
         }
 
@@ -1007,13 +1086,17 @@ public final class WifiNetworkSuggestion implements Parcelable {
             wifiConfiguration.oemPaid = mIsNetworkOemPaid;
             wifiConfiguration.oemPrivate = mIsNetworkOemPrivate;
             wifiConfiguration.carrierMerged = mIsCarrierMerged;
+            wifiConfiguration.carrierId = mCarrierId;
             wifiConfiguration.subscriptionId = mSubscriptionId;
             wifiConfiguration.macRandomizationSetting =
                     mMacRandomizationSetting == RANDOMIZATION_NON_PERSISTENT
                             ? WifiConfiguration.RANDOMIZATION_NON_PERSISTENT
                             : WifiConfiguration.RANDOMIZATION_PERSISTENT;
+            wifiConfiguration.restricted = mIsNetworkRestricted;
+            wifiConfiguration.setSubscriptionGroup(mSubscriptionGroup);
             mPasspointConfiguration.setCarrierId(mCarrierId);
             mPasspointConfiguration.setSubscriptionId(mSubscriptionId);
+            mPasspointConfiguration.setSubscriptionGroup(mSubscriptionGroup);
             mPasspointConfiguration.setMeteredOverride(wifiConfiguration.meteredOverride);
             mPasspointConfiguration.setOemPrivate(mIsNetworkOemPrivate);
             mPasspointConfiguration.setOemPaid(mIsNetworkOemPaid);
@@ -1122,11 +1205,11 @@ public final class WifiNetworkSuggestion implements Parcelable {
                         + "setCredentialSharedWithUser and "
                         + "setIsAutojoinEnabled set to false");
             }
-            if (mIsNetworkUntrusted) {
+            if (mIsNetworkUntrusted || mIsNetworkRestricted) {
                 if (mIsSharedWithUserSet && mIsSharedWithUser) {
                     throw new IllegalStateException("Should not be both"
                             + "setCredentialSharedWithUser and +"
-                            + "setUntrusted to true");
+                            + "setUntrusted or setRestricted to true");
                 }
                 mIsSharedWithUser = false;
             }
@@ -1147,12 +1230,18 @@ public final class WifiNetworkSuggestion implements Parcelable {
                 mIsSharedWithUser = false;
             }
             if (mIsCarrierMerged) {
-                if (mSubscriptionId == SubscriptionManager.INVALID_SUBSCRIPTION_ID
+                if ((mSubscriptionId == SubscriptionManager.INVALID_SUBSCRIPTION_ID
+                        && mSubscriptionGroup == null)
                         || mMeteredOverride != WifiConfiguration.METERED_OVERRIDE_METERED
                         || !isEnterpriseSuggestion()) {
                     throw new IllegalStateException("A carrier merged network must be a metered, "
                             + "enterprise network with valid subscription Id");
                 }
+            }
+            if (mSubscriptionGroup != null
+                    && mSubscriptionId != SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
+                throw new IllegalStateException("Should not be set both SubscriptionGroup and "
+                        + "SubscriptionId");
             }
             return new WifiNetworkSuggestion(
                     wifiConfiguration,
@@ -1288,7 +1377,8 @@ public final class WifiNetworkSuggestion implements Parcelable {
         return Objects.hash(wifiConfiguration.SSID, wifiConfiguration.BSSID,
                 wifiConfiguration.getDefaultSecurityType(),
                 wifiConfiguration.getPasspointUniqueId(),
-                wifiConfiguration.subscriptionId, wifiConfiguration.carrierId);
+                wifiConfiguration.subscriptionId, wifiConfiguration.carrierId,
+                wifiConfiguration.getSubscriptionGroup());
     }
 
     @Override
@@ -1311,7 +1401,9 @@ public final class WifiNetworkSuggestion implements Parcelable {
                 && TextUtils.equals(this.wifiConfiguration.getPasspointUniqueId(),
                 lhs.wifiConfiguration.getPasspointUniqueId())
                 && this.wifiConfiguration.carrierId == lhs.wifiConfiguration.carrierId
-                && this.wifiConfiguration.subscriptionId == lhs.wifiConfiguration.subscriptionId;
+                && this.wifiConfiguration.subscriptionId == lhs.wifiConfiguration.subscriptionId
+                && Objects.equals(this.wifiConfiguration.getSubscriptionGroup(),
+                lhs.wifiConfiguration.getSubscriptionGroup());
     }
 
     @Override
@@ -1338,9 +1430,11 @@ public final class WifiNetworkSuggestion implements Parcelable {
                 .append(", isHiddenSsid=").append(wifiConfiguration.hiddenSSID)
                 .append(", priorityGroup=").append(priorityGroup)
                 .append(", subscriptionId=").append(wifiConfiguration.subscriptionId)
+                .append(", subscriptionGroup=").append(wifiConfiguration.getSubscriptionGroup())
                 .append(", carrierId=").append(wifiConfiguration.carrierId)
                 .append(", priority=").append(wifiConfiguration.priority)
                 .append(", meteredness=").append(wifiConfiguration.meteredOverride)
+                .append(", restricted=").append(wifiConfiguration.restricted)
                 .append(" ]");
         return sb.toString();
     }
@@ -1432,6 +1526,15 @@ public final class WifiNetworkSuggestion implements Parcelable {
     /** @see Builder#setUntrusted(boolean)  */
     public boolean isUntrusted() {
         return !wifiConfiguration.trusted;
+    }
+
+    /**
+     * Return if a suggestion is for a restricted network
+     * @see Builder#setRestricted(boolean)
+     * @return true if the suggestion is restricted, false otherwise
+     */
+    public boolean isRestricted() {
+        return wifiConfiguration.restricted;
     }
 
     /**
@@ -1536,5 +1639,18 @@ public final class WifiNetworkSuggestion implements Parcelable {
         return wifiConfiguration.macRandomizationSetting
                 == WifiConfiguration.RANDOMIZATION_NON_PERSISTENT
                 ? RANDOMIZATION_NON_PERSISTENT : RANDOMIZATION_PERSISTENT;
+    }
+
+    /**
+     * Get the subscription Group UUID of the suggestion
+     * @see Builder#setSubscriptionGroup(ParcelUuid)
+     * @return Uuid represent a Subscription Group
+     */
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    public @Nullable ParcelUuid getSubscriptionGroup() {
+        if (!SdkLevel.isAtLeastT()) {
+            throw new UnsupportedOperationException();
+        }
+        return wifiConfiguration.getSubscriptionGroup();
     }
 }

@@ -57,7 +57,9 @@ import com.android.wifi.resources.R;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -73,13 +75,15 @@ public class HostapdHalAidlImp implements IHostapdHal {
 
     private final Object mLock = new Object();
     private boolean mVerboseLoggingEnabled = false;
+    private boolean mVerboseHalLoggingEnabled = false;
     private final Context mContext;
     private final Handler mEventHandler;
 
     // Hostapd HAL interface objects
     private IHostapd mIHostapd;
     private HashMap<String, Runnable> mSoftApFailureListeners = new HashMap<>();
-    private WifiNative.SoftApListener mSoftApEventListener;
+    private WifiNative.SoftApHalCallback mSoftApEventCallback;
+    private Set<String> mActiveInstances = new HashSet<>();
     private HostapdDeathEventHandler mDeathEventHandler;
     private boolean mServiceDeclared = false;
     private HostapdDeathRecipient mIHostapdDeathRecipient;
@@ -127,9 +131,10 @@ public class HostapdHalAidlImp implements IHostapdHal {
      * @param enable true to enable, false to disable.
      */
     @Override
-    public void enableVerboseLogging(boolean enable) {
+    public void enableVerboseLogging(boolean verboseEnabled, boolean halVerboseEnabled) {
         synchronized (mLock) {
-            mVerboseLoggingEnabled = enable;
+            mVerboseLoggingEnabled = verboseEnabled;
+            mVerboseHalLoggingEnabled = halVerboseEnabled;
             setDebugParams();
         }
     }
@@ -161,7 +166,7 @@ public class HostapdHalAidlImp implements IHostapdHal {
     /**
      * Register for callbacks with the hostapd service. On service-side event,
      * the hostapd service will trigger our IHostapdCallback implementation, which
-     * in turn calls the proper SoftApListener registered with us by WifiNative.
+     * in turn calls the proper SoftApHalCallback registered with us by WifiNative.
      */
     private boolean registerCallback(IHostapdCallback callback) {
         synchronized (mLock) {
@@ -190,14 +195,14 @@ public class HostapdHalAidlImp implements IHostapdHal {
      */
     @Override
     public boolean registerApCallback(@NonNull String ifaceName,
-            @NonNull WifiNative.SoftApListener listener) {
+            @NonNull WifiNative.SoftApHalCallback callback) {
         // TODO(b/195980798) : Create a hashmap to associate the listener with the ifaceName
         synchronized (mLock) {
-            if (listener == null) {
+            if (callback == null) {
                 Log.e(TAG, "registerApCallback called with a null callback");
                 return false;
             }
-            mSoftApEventListener = listener;
+            mSoftApEventCallback = callback;
             Log.i(TAG, "registerApCallback Successful in " + ifaceName);
             return true;
         }
@@ -257,7 +262,7 @@ public class HostapdHalAidlImp implements IHostapdHal {
             }
             try {
                 mSoftApFailureListeners.remove(ifaceName);
-                mSoftApEventListener = null;
+                mSoftApEventCallback = null;
                 mIHostapd.removeAccessPoint(ifaceName);
                 return true;
             } catch (RemoteException e) {
@@ -358,11 +363,16 @@ public class HostapdHalAidlImp implements IHostapdHal {
 
     private class HostapdCallback extends IHostapdCallback.Stub {
         @Override
-        public void onFailure(String ifaceName) {
-            Log.w(TAG, "Failure on iface " + ifaceName);
+        public void onFailure(String ifaceName, String instanceName) {
+            Log.w(TAG, "Failure on iface " + ifaceName + ", instance: " + instanceName);
             Runnable onFailureListener = mSoftApFailureListeners.get(ifaceName);
             if (onFailureListener != null) {
-                onFailureListener.run();
+                mActiveInstances.remove(instanceName);
+                if (mActiveInstances.size() == 0) {
+                    onFailureListener.run();
+                } else if (mSoftApEventCallback != null) {
+                    mSoftApEventCallback.onInstanceFailure(instanceName);
+                }
             }
         }
 
@@ -371,12 +381,13 @@ public class HostapdHalAidlImp implements IHostapdHal {
             Log.v(TAG, "onApInstanceInfoChanged on " + info.ifaceName + " / "
                     + info.apIfaceInstance);
             try {
-                if (mSoftApEventListener != null) {
-                    mSoftApEventListener.onInfoChanged(info.apIfaceInstance, info.freqMhz,
+                if (mSoftApEventCallback != null) {
+                    mSoftApEventCallback.onInfoChanged(info.apIfaceInstance, info.freqMhz,
                             mapHalBandwidthToSoftApInfo(info.bandwidth),
                             mapHalGenerationToWifiStandard(info.generation),
                             MacAddress.fromBytes(info.apIfaceInstanceMacAddress));
                 }
+                mActiveInstances.add(info.apIfaceInstance);
             } catch (IllegalArgumentException iae) {
                 Log.e(TAG, " Invalid apIfaceInstanceMacAddress, " + iae);
             }
@@ -389,8 +400,8 @@ public class HostapdHalAidlImp implements IHostapdHal {
                         + " / " + info.apIfaceInstance
                         + " and Mac is " + MacAddress.fromBytes(info.clientAddress).toString()
                         + " isConnected: " + info.isConnected);
-                if (mSoftApEventListener != null) {
-                    mSoftApEventListener.onConnectedClientsChanged(info.apIfaceInstance,
+                if (mSoftApEventCallback != null) {
+                    mSoftApEventCallback.onConnectedClientsChanged(info.apIfaceInstance,
                             MacAddress.fromBytes(info.clientAddress), info.isConnected);
                 }
             } catch (IllegalArgumentException iae) {
@@ -532,7 +543,7 @@ public class HostapdHalAidlImp implements IHostapdHal {
                 return false;
             }
             try {
-                mIHostapd.setDebugParams(mVerboseLoggingEnabled
+                mIHostapd.setDebugParams(mVerboseHalLoggingEnabled
                         ? DebugLevel.DEBUG : DebugLevel.INFO);
                 return true;
             } catch (RemoteException e) {
@@ -746,11 +757,27 @@ public class HostapdHalAidlImp implements IHostapdHal {
     private NetworkParams prepareNetworkParams(boolean isMetered,
             SoftApConfiguration config) {
         NetworkParams nwParams = new NetworkParams();
-        ArrayList<Byte> ssid = NativeUtil.stringToByteArrayList(config.getSsid());
+        ArrayList<Byte> ssid = NativeUtil.byteArrayToArrayList(config.getWifiSsid().getBytes());
         nwParams.ssid = new byte[ssid.size()];
         for (int i = 0; i < ssid.size(); i++) {
             nwParams.ssid[i] = ssid.get(i);
         }
+
+        final List<ScanResult.InformationElement> elements = config.getVendorElementsInternal();
+        int totalLen = 0;
+        for (ScanResult.InformationElement e : elements) {
+            totalLen += 2 + e.bytes.length; // 1 byte ID + 1 byte payload len + payload
+        }
+        nwParams.vendorElements = new byte[totalLen];
+        int i = 0;
+        for (ScanResult.InformationElement e : elements) {
+            nwParams.vendorElements[i++] = (byte) e.id;
+            nwParams.vendorElements[i++] = (byte) e.bytes.length;
+            for (int j = 0; j < e.bytes.length; j++) {
+                nwParams.vendorElements[i++] = e.bytes[j];
+            }
+        }
+
         nwParams.isMetered = isMetered;
         nwParams.isHidden = config.isHiddenSsid();
         nwParams.encryptionType = getEncryptionType(config);

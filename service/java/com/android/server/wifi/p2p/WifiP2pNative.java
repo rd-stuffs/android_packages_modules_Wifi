@@ -104,9 +104,9 @@ public class WifiP2pNative {
     /**
      * Enable verbose logging for all sub modules.
      */
-    public void enableVerboseLogging(int verbose) {
-        mVerboseLoggingEnabled = verbose > 0;
-        SupplicantP2pIfaceHal.enableVerboseLogging(verbose);
+    public void enableVerboseLogging(boolean verboseEnabled, boolean halVerboseEnabled) {
+        mVerboseLoggingEnabled = verboseEnabled;
+        SupplicantP2pIfaceHal.enableVerboseLogging(verboseEnabled, halVerboseEnabled);
     }
 
     private static final int CONNECT_TO_SUPPLICANT_SAMPLING_INTERVAL_MS = 100;
@@ -140,11 +140,11 @@ public class WifiP2pNative {
      * Close supplicant connection.
      */
     public void closeSupplicantConnection() {
-        // Nothing to do for HIDL.
+        // Nothing to do for HAL.
     }
 
     /**
-     * Returns whether HAL (HIDL) is supported on this device or not.
+     * Returns whether HAL is supported on this device or not.
      */
     public boolean isHalInterfaceSupported() {
         return mHalDeviceManager.isSupported();
@@ -230,7 +230,7 @@ public class WifiP2pNative {
                 Log.i(TAG, "P2P interface teardown completed");
             }
         } else {
-            Log.i(TAG, "HAL (HIDL) is not supported. Destroy listener for the interface.");
+            Log.i(TAG, "HAL is not supported. Destroy listener for the interface.");
             String ifaceName = mPropertyService.getString(P2P_INTERFACE_PROPERTY, P2P_IFACE_NAME);
             mInterfaceDestroyedListener.teardownAndInvalidate(ifaceName);
         }
@@ -244,7 +244,7 @@ public class WifiP2pNative {
             if (mIWifiP2pIface == null) return false;
             return mHalDeviceManager.replaceRequestorWs(mIWifiP2pIface, requestorWs);
         } else {
-            Log.i(TAG, "HAL (HIDL) is not supported. Ignore replace requestorWs");
+            Log.i(TAG, "HAL is not supported. Ignore replace requestorWs");
             return true;
         }
     }

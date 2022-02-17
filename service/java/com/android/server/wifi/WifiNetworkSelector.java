@@ -158,16 +158,17 @@ public class WifiNetworkSelector {
 
         /**
          * Evaluate all the networks from the scan results.
-         *
          * @param scanDetails              a list of scan details constructed from the scan results
          * @param untrustedNetworkAllowed  a flag to indicate if untrusted networks are allowed
          * @param oemPaidNetworkAllowed    a flag to indicate if oem paid networks are allowed
          * @param oemPrivateNetworkAllowed a flag to indicate if oem private networks are allowed
+         * @param restrictedNetworkAllowed a flag to indicate if restrictednetworks are allowed
          * @param onConnectableListener    callback to record all of the connectable networks
          */
         void nominateNetworks(List<ScanDetail> scanDetails,
                 boolean untrustedNetworkAllowed, boolean oemPaidNetworkAllowed,
-                boolean oemPrivateNetworkAllowed, OnConnectableListener onConnectableListener);
+                boolean oemPrivateNetworkAllowed, boolean restrictedNetworkAllowed,
+                OnConnectableListener onConnectableListener);
 
         /**
          * Callback for recording connectable candidates
@@ -280,6 +281,14 @@ public class WifiNetworkSelector {
 
         // Current network is set as unusable by the external scorer.
         if (!wifiInfo.isUsable()) {
+            return false;
+        }
+
+        // External scorer is not being used, and the current network's score is below the
+        // sufficient score threshold configured for the AOSP scorer.
+        if (!mWifiGlobals.isUsingExternalScorer()
+                && wifiInfo.getScore()
+                < mWifiGlobals.getWifiLowConnectedScoreThresholdToTriggerScanForMbb()) {
             return false;
         }
 
@@ -802,12 +811,16 @@ public class WifiNetworkSelector {
      * @param untrustedNetworkAllowed  True if untrusted networks are allowed for connection
      * @param oemPaidNetworkAllowed    True if oem paid networks are allowed for connection
      * @param oemPrivateNetworkAllowed True if oem private networks are allowed for connection
+     * @param restrictedNetworkAllowed True if restricted networks are allowed for connection
+     * @param multiInternetNetworkAllowed True if multi internet networks are allowed for
+     *                                    connection.
      * @return list of valid Candidate(s)
      */
     public List<WifiCandidates.Candidate> getCandidatesFromScan(
             @NonNull List<ScanDetail> scanDetails, @NonNull Set<String> bssidBlocklist,
             @NonNull List<ClientModeManagerState> cmmStates, boolean untrustedNetworkAllowed,
-            boolean oemPaidNetworkAllowed, boolean oemPrivateNetworkAllowed) {
+            boolean oemPaidNetworkAllowed, boolean oemPrivateNetworkAllowed,
+            boolean restrictedNetworkAllowed, boolean multiInternetNetworkAllowed) {
         mFilteredNetworks.clear();
         mConnectableNetworks.clear();
         if (scanDetails.size() == 0) {
@@ -826,7 +839,7 @@ public class WifiNetworkSelector {
         updateCandidatesSecurityParams(scanDetails);
 
         // Shall we start network selection at all?
-        if (!isNetworkSelectionNeeded(scanDetails, cmmStates)) {
+        if (!multiInternetNetworkAllowed && !isNetworkSelectionNeeded(scanDetails, cmmStates)) {
             return null;
         }
 
@@ -880,7 +893,7 @@ public class WifiNetworkSelector {
             registeredNominator.nominateNetworks(
                     new ArrayList<>(mFilteredNetworks),
                     untrustedNetworkAllowed, oemPaidNetworkAllowed, oemPrivateNetworkAllowed,
-                    (scanDetail, config) -> {
+                    restrictedNetworkAllowed, (scanDetail, config) -> {
                         WifiCandidates.Key key = wifiCandidates.keyFromScanDetailAndConfig(
                                 scanDetail, config);
                         if (key != null) {
@@ -1051,6 +1064,19 @@ public class WifiNetworkSelector {
      */
     @Nullable
     public WifiConfiguration selectNetwork(@NonNull List<WifiCandidates.Candidate> candidates) {
+        return selectNetwork(candidates, true);
+    }
+
+    /**
+     * Using the registered Scorers, choose the best network from the list of Candidate(s).
+     * The ScanDetailCache is also updated here.
+     * @param candidates - Candidates to perferm network selection on.
+     * @param overrideEnabled If it is allowed to override candidate with User Connect Choice.
+     * @return WifiConfiguration - the selected network, or null.
+     */
+    @Nullable
+    public WifiConfiguration selectNetwork(@NonNull List<WifiCandidates.Candidate> candidates,
+            boolean overrideEnabled) {
         if (candidates == null || candidates.size() == 0) {
             return null;
         }
@@ -1126,7 +1152,7 @@ public class WifiNetworkSelector {
         // Get a fresh copy of WifiConfiguration reflecting any scan result updates
         WifiConfiguration selectedNetwork =
                 mWifiConfigManager.getConfiguredNetwork(selectedNetworkId);
-        if (selectedNetwork != null && legacyOverrideWanted) {
+        if (selectedNetwork != null && legacyOverrideWanted && overrideEnabled) {
             selectedNetwork = overrideCandidateWithUserConnectChoice(selectedNetwork);
         }
         if (selectedNetwork != null) {

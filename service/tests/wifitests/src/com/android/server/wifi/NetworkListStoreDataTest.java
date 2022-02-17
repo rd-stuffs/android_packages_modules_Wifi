@@ -108,6 +108,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "</SecurityParams>\n"
                     + "</SecurityParamsList>\n"
                     + "<boolean name=\"Trusted\" value=\"true\" />\n"
+                    + "<boolean name=\"IsRestricted\" value=\"false\" />\n"
                     + "<boolean name=\"OemPaid\" value=\"false\" />\n"
                     + "<boolean name=\"OemPrivate\" value=\"false\" />\n"
                     + "<boolean name=\"CarrierMerged\" value=\"false\" />\n"
@@ -185,6 +186,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "</SecurityParams>\n"
                     + "</SecurityParamsList>\n"
                     + "<boolean name=\"Trusted\" value=\"true\" />\n"
+                    + "<boolean name=\"IsRestricted\" value=\"false\" />\n"
                     + "<boolean name=\"OemPaid\" value=\"false\" />\n"
                     + "<boolean name=\"OemPrivate\" value=\"false\" />\n"
                     + "<boolean name=\"CarrierMerged\" value=\"false\" />\n"
@@ -248,6 +250,8 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<null name=\"KeyChainAlias\" />\n"
                     + (SdkLevel.isAtLeastS()
                     ? "<null name=\"DecoratedIdentityPrefix\" />\n" : "")
+                    + "<boolean name=\"TrustOnFirstUse\" value=\"false\" />\n"
+                    + "<boolean name=\"UserApproveNoCaCert\" value=\"false\" />\n"
                     + "</WifiEnterpriseConfiguration>\n"
                     + "</Network>\n";;
 
@@ -282,6 +286,7 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "</SecurityParams>\n"
                     + "</SecurityParamsList>\n"
                     + "<boolean name=\"Trusted\" value=\"true\" />\n"
+                    + "<boolean name=\"IsRestricted\" value=\"false\" />\n"
                     + "<boolean name=\"OemPaid\" value=\"false\" />\n"
                     + "<boolean name=\"OemPrivate\" value=\"false\" />\n"
                     + "<boolean name=\"CarrierMerged\" value=\"false\" />\n"
@@ -422,6 +427,8 @@ public class NetworkListStoreDataTest extends WifiBaseTest {
                     + "<null name=\"KeyChainAlias\" />\n"
                     + (SdkLevel.isAtLeastS()
                     ? "<null name=\"DecoratedIdentityPrefix\" />\n" : "")
+                    + "<boolean name=\"TrustOnFirstUse\" value=\"false\" />\n"
+                    + "<boolean name=\"UserApproveNoCaCert\" value=\"false\" />\n"
                     + "</WifiEnterpriseConfiguration>\n"
                     + "</Network>\n";;
 

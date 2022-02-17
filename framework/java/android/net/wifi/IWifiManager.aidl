@@ -46,7 +46,9 @@ import android.net.wifi.WifiConfiguration;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.net.wifi.WifiNetworkSuggestion;
+import android.net.wifi.WifiSsid;
 
+import android.os.Bundle;
 import android.os.Messenger;
 import android.os.ResultReceiver;
 import android.os.WorkSource;
@@ -64,11 +66,19 @@ interface IWifiManager
 
     oneway void getWifiActivityEnergyInfoAsync(in IOnWifiActivityEnergyInfoListener listener);
 
+    void setScreenOnScanSchedule(in int[] scanSchedule, in int[] scanType);
+
     ParceledListSlice getConfiguredNetworks(String packageName, String featureId, boolean callerNetworksOnly);
 
-    ParceledListSlice getPrivilegedConfiguredNetworks(String packageName, String featureId);
+    ParceledListSlice getPrivilegedConfiguredNetworks(String packageName, String featureId, in Bundle extras);
+
+    WifiConfiguration getPrivilegedConnectedNetwork(String packageName, String featureId, in Bundle extras);
 
     Map getAllMatchingFqdnsForScanResults(in List<ScanResult> scanResult);
+
+    void setSsidsDoNotBlocklist(String packageName, in List<WifiSsid> ssids);
+
+    List getSsidsDoNotBlocklist(String packageName);
 
     Map getMatchingOsuProviders(in List<ScanResult> scanResult);
 
@@ -131,7 +141,7 @@ interface IWifiManager
     void unregisterDriverCountryCodeChangedListener(
             in IOnWifiDriverCountryCodeChangedListener listener);
 
-    String getCountryCode();
+    String getCountryCode(in String packageName, in String featureId);
 
     void setOverrideCountryCode(String country);
 
@@ -186,9 +196,13 @@ interface IWifiManager
     boolean stopSoftAp();
 
     int startLocalOnlyHotspot(in ILocalOnlyHotspotCallback callback, String packageName,
-                              String featureId, in SoftApConfiguration customConfig);
+                              String featureId, in SoftApConfiguration customConfig, in Bundle extras);
 
     void stopLocalOnlyHotspot();
+
+    void registerLocalOnlyHotspotSoftApCallback(in ISoftApCallback callback, in Bundle extras);
+
+    void unregisterLocalOnlyHotspotSoftApCallback(in ISoftApCallback callback, in Bundle extras);
 
     void startWatchLocalOnlyHotspot(in ILocalOnlyHotspotCallback callback);
 
@@ -262,7 +276,7 @@ interface IWifiManager
     int addNetworkSuggestions(in List<WifiNetworkSuggestion> networkSuggestions, in String packageName,
         in String featureId);
 
-    int removeNetworkSuggestions(in List<WifiNetworkSuggestion> networkSuggestions, in String packageName);
+    int removeNetworkSuggestions(in List<WifiNetworkSuggestion> networkSuggestions, in String packageName, int action);
 
     List<WifiNetworkSuggestion> getNetworkSuggestions(in String packageName);
 
@@ -361,4 +375,8 @@ interface IWifiManager
     boolean isWifiPasspointEnabled();
 
     void setWifiPasspointEnabled(boolean enabled);
+
+    int getStaConcurrencyForMultiInternetMode();
+
+    boolean setStaConcurrencyForMultiInternetMode(int mode);
 }

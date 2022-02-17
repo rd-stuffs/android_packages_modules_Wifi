@@ -16,6 +16,8 @@
 
 package android.net.wifi;
 
+import static android.net.wifi.ScanResult.InformationElement.EID_VSA;
+
 import static com.google.common.truth.Truth.assertThat;
 
 import static org.junit.Assert.assertNull;
@@ -41,6 +43,22 @@ import java.util.Random;
 public class SoftApConfigurationTest {
     private static final String TEST_CHAR_SET_AS_STRING = "abcdefghijklmnopqrstuvwxyz0123456789";
     private static final String TEST_BSSID = "aa:22:33:aa:bb:cc";
+    private static final List<ScanResult.InformationElement> TEST_TWO_VENDOR_ELEMENTS =
+            new ArrayList<>(Arrays.asList(
+                    new ScanResult.InformationElement(EID_VSA, 0, new byte[]{ 1, 2, 3, 4 }),
+                    new ScanResult.InformationElement(
+                            EID_VSA,
+                            0,
+                            new byte[]{ (byte) 170, (byte) 187, (byte) 204, (byte) 221 })
+                    ));
+    private static final List<ScanResult.InformationElement> TEST_TWO_VENDOR_ELEMENTS_INVALID =
+            new ArrayList<>(Arrays.asList(
+                    new ScanResult.InformationElement(EID_VSA, 0, new byte[]{ 1, 2, 3, 4 }),
+                    new ScanResult.InformationElement(
+                            (byte) 222,
+                            0,
+                            new byte[]{ (byte) 170, (byte) 187, (byte) 204, (byte) 221 })
+                    ));
 
     private SoftApConfiguration parcelUnparcel(SoftApConfiguration configIn) {
         Parcel parcel = Parcel.obtain();
@@ -74,11 +92,13 @@ public class SoftApConfigurationTest {
     @Test
     public void testBasicSettings() {
         MacAddress testBssid = MacAddress.fromString(TEST_BSSID);
+        String utf8Ssid = "ssid";
         SoftApConfiguration original = new SoftApConfiguration.Builder()
-                .setSsid("ssid")
+                .setSsid(utf8Ssid)
                 .setBssid(testBssid)
                 .build();
-        assertThat(original.getSsid()).isEqualTo("ssid");
+        assertThat(original.getSsid()).isEqualTo(utf8Ssid);
+        assertThat(original.getWifiSsid()).isEqualTo(WifiSsid.fromUtf8Text(utf8Ssid));
         assertThat(original.getBssid()).isEqualTo(testBssid);
         assertThat(original.getPassphrase()).isNull();
         assertThat(original.getSecurityType()).isEqualTo(SoftApConfiguration.SECURITY_TYPE_OPEN);
@@ -87,14 +107,22 @@ public class SoftApConfigurationTest {
         assertThat(original.isHiddenSsid()).isEqualTo(false);
         assertThat(original.getMaxNumberOfClients()).isEqualTo(0);
         if (SdkLevel.isAtLeastS()) {
-            assertThat(original.getMacRandomizationSetting())
-                    .isEqualTo(SoftApConfiguration.RANDOMIZATION_PERSISTENT);
             assertThat(original.isBridgedModeOpportunisticShutdownEnabled())
                     .isEqualTo(true);
             assertThat(original.isIeee80211axEnabled())
                     .isEqualTo(true);
             assertThat(original.isUserConfiguration())
                     .isEqualTo(true);
+            if (SdkLevel.isAtLeastT()) {
+                assertThat(original.getBridgedModeOpportunisticShutdownTimeoutMillis())
+                        .isEqualTo(0);
+                assertThat(original.getMacRandomizationSetting())
+                        .isEqualTo(SoftApConfiguration.RANDOMIZATION_NON_PERSISTENT);
+                assertThat(original.getVendorElements().size()).isEqualTo(0);
+            } else {
+                assertThat(original.getMacRandomizationSetting())
+                        .isEqualTo(SoftApConfiguration.RANDOMIZATION_PERSISTENT);
+            }
         }
 
         SoftApConfiguration unparceled = parcelUnparcel(original);
@@ -110,6 +138,8 @@ public class SoftApConfigurationTest {
 
     @Test
     public void testSetWifiSsid() {
+        assumeTrue(SdkLevel.isAtLeastT());
+
         // UTF-8
         WifiSsid wifiSsidUtf8 = WifiSsid.fromUtf8Text("ssid");
         SoftApConfiguration utf8Config = new SoftApConfiguration.Builder()
@@ -186,6 +216,11 @@ public class SoftApConfigurationTest {
             originalBuilder.setUserConfiguration(false);
         }
 
+        if (SdkLevel.isAtLeastT()) {
+            originalBuilder.setBridgedModeOpportunisticShutdownTimeoutMillis(300_000);
+            originalBuilder.setVendorElements(TEST_TWO_VENDOR_ELEMENTS);
+        }
+
         SoftApConfiguration original = originalBuilder.build();
         assertThat(original.getPassphrase()).isEqualTo("secretsecret");
         assertThat(original.getSecurityType()).isEqualTo(
@@ -208,6 +243,12 @@ public class SoftApConfigurationTest {
                     .isEqualTo(false);
             assertThat(original.isUserConfiguration())
                     .isEqualTo(false);
+        }
+        if (SdkLevel.isAtLeastT()) {
+            assertThat(original.getBridgedModeOpportunisticShutdownTimeoutMillis())
+                    .isEqualTo(300_000);
+            assertThat(original.getVendorElements())
+                    .isEqualTo(TEST_TWO_VENDOR_ELEMENTS);
         }
 
         SoftApConfiguration unparceled = parcelUnparcel(original);
@@ -575,6 +616,24 @@ public class SoftApConfigurationTest {
         SoftApConfiguration config = new SoftApConfiguration.Builder()
                 .setSsid("ssid")
                 .setChannels(invalid_channels)
+                .build();
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testInvalidVendorElementsID() {
+        assumeTrue(SdkLevel.isAtLeastT());
+        SoftApConfiguration original = new SoftApConfiguration.Builder()
+                .setVendorElements(TEST_TWO_VENDOR_ELEMENTS_INVALID)
+                .build();
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testInvalidVendorElementsDuplicate() {
+        assumeTrue(SdkLevel.isAtLeastT());
+        List<ScanResult.InformationElement> dupElements = new ArrayList<>(TEST_TWO_VENDOR_ELEMENTS);
+        dupElements.addAll(TEST_TWO_VENDOR_ELEMENTS);
+        SoftApConfiguration original = new SoftApConfiguration.Builder()
+                .setVendorElements(dupElements)
                 .build();
     }
 }

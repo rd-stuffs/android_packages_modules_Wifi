@@ -16,6 +16,11 @@
 
 package android.net.wifi.aware;
 
+import static android.Manifest.permission.ACCESS_FINE_LOCATION;
+import static android.Manifest.permission.ACCESS_WIFI_STATE;
+import static android.Manifest.permission.CHANGE_WIFI_STATE;
+import static android.Manifest.permission.NEARBY_WIFI_DEVICES;
+
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -28,6 +33,7 @@ import android.content.Context;
 import android.net.ConnectivityManager;
 import android.net.NetworkRequest;
 import android.net.NetworkSpecifier;
+import android.net.wifi.WifiManager;
 import android.net.wifi.util.HexEncoding;
 import android.os.Binder;
 import android.os.Build;
@@ -197,6 +203,7 @@ public class WifiAwareManager {
      * @return A boolean indicating whether the app can use the Aware API at this time (true) or
      * not (false).
      */
+    @RequiresPermission(ACCESS_WIFI_STATE)
     public boolean isAvailable() {
         try {
             return mService.isUsageEnabled();
@@ -213,9 +220,25 @@ public class WifiAwareManager {
      * @return A boolean indicating whether the device is attached to a cluster at this time (true)
      *         or not (false).
      */
+    @RequiresPermission(ACCESS_WIFI_STATE)
     public boolean isDeviceAttached() {
         try {
             return mService.isDeviceAttached();
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
+
+    /**
+     * Return the device support for setting a channel requirement in a data-path request. If true
+     * the channel set by {@link WifiAwareNetworkSpecifier.Builder#setChannelInMhz(int, boolean)}
+     * will be honored, otherwise it will be ignored.
+     * @return True is the device support set channel on data-path request, false otherwise.
+     */
+    @RequiresPermission(ACCESS_WIFI_STATE)
+    public boolean isSetChannelOnDataPathSupported() {
+        try {
+            return mService.isSetChannelOnDataPathSupported();
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -230,6 +253,7 @@ public class WifiAwareManager {
      */
     @SystemApi
     @RequiresApi(Build.VERSION_CODES.S)
+    @RequiresPermission(CHANGE_WIFI_STATE)
     public void enableInstantCommunicationMode(boolean enable) {
         if (!SdkLevel.isAtLeastS()) {
             throw new UnsupportedOperationException();
@@ -248,6 +272,7 @@ public class WifiAwareManager {
      * @return true if it is enabled, false otherwise.
      */
     @RequiresApi(Build.VERSION_CODES.S)
+    @RequiresPermission(ACCESS_WIFI_STATE)
     public boolean isInstantCommunicationModeEnabled() {
         if (!SdkLevel.isAtLeastS()) {
             throw new UnsupportedOperationException();
@@ -270,6 +295,7 @@ public class WifiAwareManager {
      *
      * @return An object specifying configuration limitations of Aware.
      */
+    @RequiresPermission(ACCESS_WIFI_STATE)
     public @Nullable Characteristics getCharacteristics() {
         try {
             return mService.getCharacteristics();
@@ -289,6 +315,7 @@ public class WifiAwareManager {
      *
      * @return An object specifying the currently available resource of the Wi-Fi Aware service.
      */
+    @RequiresPermission(ACCESS_WIFI_STATE)
     public @Nullable AwareResources getAvailableAwareResources() {
         try {
             return mService.getAvailableAwareResources();
@@ -315,6 +342,10 @@ public class WifiAwareManager {
      * attachCallback} object. If a null is provided then the application's main thread will be
      *                used.
      */
+    @RequiresPermission(allOf = {
+            ACCESS_WIFI_STATE,
+            CHANGE_WIFI_STATE
+    })
     public void attach(@NonNull AttachCallback attachCallback, @Nullable Handler handler) {
         attach(handler, null, attachCallback, null);
     }
@@ -333,11 +364,22 @@ public class WifiAwareManager {
      * <p>
      * This version of the API attaches a listener to receive the MAC address of the Aware interface
      * on startup and whenever it is updated (it is randomized at regular intervals for privacy).
-     * The application must have the {@link android.Manifest.permission#ACCESS_FINE_LOCATION}
-     * permission to execute this attach request. Otherwise, use the
-     * {@link #attach(AttachCallback, Handler)} version. Note that aside from permission
-     * requirements this listener will wake up the host at regular intervals causing higher power
-     * consumption, do not use it unless the information is necessary (e.g. for OOB discovery).
+     *
+     * If targeting {@link android.os.Build.VERSION_CODES#TIRAMISU} or later, the application must
+     * have {@link android.Manifest.permission#NEARBY_WIFI_DEVICES} with
+     * android:usesPermissionFlags="neverForLocation". If the application does not declare
+     * android:usesPermissionFlags="neverForLocation", then it must also have
+     * {@link android.Manifest.permission#ACCESS_FINE_LOCATION}.
+     *
+     * If targeting an earlier release than {@link android.os.Build.VERSION_CODES#TIRAMISU}, the
+     * application must have {@link android.Manifest.permission#ACCESS_FINE_LOCATION}.
+     *
+     * Apps without {@link android.Manifest.permission#NEARBY_WIFI_DEVICES} or
+     * {@link android.Manifest.permission#ACCESS_FINE_LOCATION} can use the
+     * {@link #attach(AttachCallback, Handler)} version.
+     * Note that aside from permission requirements the {@link IdentityChangedListener} will wake up
+     * the host at regular intervals causing higher power consumption, do not use it unless the
+     * information is necessary (e.g. for out-of-band discovery).
      *
      * @param attachCallback A callback for attach events, extended from
      * {@link AttachCallback}.
@@ -347,6 +389,11 @@ public class WifiAwareManager {
      * attachCallback} and {@code identityChangedListener} objects. If a null is provided then the
      *                application's main thread will be used.
      */
+    @RequiresPermission(allOf = {
+            ACCESS_WIFI_STATE,
+            CHANGE_WIFI_STATE,
+            ACCESS_FINE_LOCATION,
+            NEARBY_WIFI_DEVICES}, conditional = true)
     public void attach(@NonNull AttachCallback attachCallback,
             @NonNull IdentityChangedListener identityChangedListener,
             @Nullable Handler handler) {
@@ -372,10 +419,15 @@ public class WifiAwareManager {
 
             try {
                 Binder binder = new Binder();
+                Bundle extras = new Bundle();
+                if (SdkLevel.isAtLeastS()) {
+                    extras.putParcelable(WifiManager.EXTRA_PARAM_KEY_ATTRIBUTION_SOURCE,
+                            mContext.getAttributionSource());
+                }
                 mService.connect(binder, mContext.getOpPackageName(), mContext.getAttributionTag(),
                         new WifiAwareEventCallbackProxy(this, looper, binder, attachCallback,
                                 identityChangedListener), configRequest,
-                        identityChangedListener != null);
+                        identityChangedListener != null, extras);
             } catch (RemoteException e) {
                 throw e.rethrowFromSystemServer();
             }
@@ -403,10 +455,15 @@ public class WifiAwareManager {
         }
 
         try {
+            Bundle extras = new Bundle();
+            if (SdkLevel.isAtLeastS()) {
+                extras.putParcelable(WifiManager.EXTRA_PARAM_KEY_ATTRIBUTION_SOURCE,
+                        mContext.getAttributionSource());
+            }
             mService.publish(mContext.getOpPackageName(), mContext.getAttributionTag(), clientId,
                     publishConfig,
                     new WifiAwareDiscoverySessionCallbackProxy(this, looper, true, callback,
-                            clientId));
+                            clientId), extras);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -441,10 +498,15 @@ public class WifiAwareManager {
         }
 
         try {
+            Bundle extras = new Bundle();
+            if (SdkLevel.isAtLeastS()) {
+                extras.putParcelable(WifiManager.EXTRA_PARAM_KEY_ATTRIBUTION_SOURCE,
+                        mContext.getAttributionSource());
+            }
             mService.subscribe(mContext.getOpPackageName(), mContext.getAttributionTag(), clientId,
                     subscribeConfig,
                     new WifiAwareDiscoverySessionCallbackProxy(this, looper, false, callback,
-                            clientId));
+                            clientId), extras);
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
@@ -551,7 +613,7 @@ public class WifiAwareManager {
                 pmk,
                 passphrase,
                 0, // no port info for deprecated IB APIs
-                -1); // no transport info for deprecated IB APIs
+                -1, 0, false); // no transport info for deprecated IB APIs
     }
 
     /** @hide */
@@ -591,13 +653,14 @@ public class WifiAwareManager {
                 pmk,
                 passphrase,
                 0, // no port info for OOB APIs
-                -1); // no transport protocol info for OOB APIs
+                -1, 0, false); // no transport protocol info for OOB APIs
     }
 
     private static class WifiAwareEventCallbackProxy extends IWifiAwareEventCallback.Stub {
         private static final int CALLBACK_CONNECT_SUCCESS = 0;
         private static final int CALLBACK_CONNECT_FAIL = 1;
         private static final int CALLBACK_IDENTITY_CHANGED = 2;
+        private static final int CALLBACK_ATTACH_TERMINATE = 3;
 
         private final Handler mHandler;
         private final WeakReference<WifiAwareManager> mAwareManager;
@@ -648,6 +711,9 @@ public class WifiAwareManager {
                                 identityChangedListener.onIdentityChanged((byte[]) msg.obj);
                             }
                             break;
+                        case CALLBACK_ATTACH_TERMINATE:
+                            mAwareManager.clear();
+                            attachCallback.onShutDown();
                     }
                 }
             };
@@ -677,6 +743,14 @@ public class WifiAwareManager {
 
             Message msg = mHandler.obtainMessage(CALLBACK_IDENTITY_CHANGED);
             msg.obj = mac;
+            mHandler.sendMessage(msg);
+        }
+
+        @Override
+        public void onAttachTerminate() {
+            if (VDBG) Log.v(TAG, "onShutDown");
+
+            Message msg = mHandler.obtainMessage(CALLBACK_ATTACH_TERMINATE);
             mHandler.sendMessage(msg);
         }
     }

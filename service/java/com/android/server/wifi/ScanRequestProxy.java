@@ -219,8 +219,8 @@ public class ScanRequestProxy {
     /**
      * Enable verbose logging.
      */
-    public void enableVerboseLogging(int verbose) {
-        mVerboseLoggingEnabled = (verbose > 0);
+    public void enableVerboseLogging(boolean verboseEnabled) {
+        mVerboseLoggingEnabled = verboseEnabled;
     }
 
     /**
@@ -580,6 +580,10 @@ public class ScanRequestProxy {
     public void setScanThrottleEnabled(boolean enable) {
         mThrottleEnabled = enable;
         mSettingsConfigStore.put(WIFI_SCAN_THROTTLE_ENABLED, enable);
+
+        // reset internal counters when enabling/disabling throttling
+        mLastScanTimestampsForFgApps.clear();
+        mLastScanTimestampForBgApps = 0;
         Log.i(TAG, "Scan throttle enabled " + mThrottleEnabled);
     }
 
@@ -594,7 +598,7 @@ public class ScanRequestProxy {
     /** Indicate whether there are WPA2 personal only networks. */
     public boolean isWpa2PersonalOnlyNetworkInRange(String ssid) {
         return mLastScanResultsMap.values().stream().anyMatch(r ->
-                ssid.equals(ScanResultUtil.createQuotedSsid(r.SSID))
+                ssid.equals(r.getWifiSsid().toString())
                 && ScanResultUtil.isScanResultForPskNetwork(r)
                 && !ScanResultUtil.isScanResultForSaeNetwork(r));
     }
@@ -602,15 +606,22 @@ public class ScanRequestProxy {
     /** Indicate whether there are WPA3 only networks. */
     public boolean isWpa3PersonalOnlyNetworkInRange(String ssid) {
         return mLastScanResultsMap.values().stream().anyMatch(r ->
-                ssid.equals(ScanResultUtil.createQuotedSsid(r.SSID))
+                ssid.equals(r.getWifiSsid().toString())
                 && ScanResultUtil.isScanResultForSaeNetwork(r)
                 && !ScanResultUtil.isScanResultForPskNetwork(r));
+    }
+
+    /** Indicate whether there are WPA2/WPA3 transition mode networks. */
+    public boolean isWpa2Wpa3PersonalTransitionNetworkInRange(String ssid) {
+        return mLastScanResultsMap.values().stream().anyMatch(r ->
+                ssid.equals(ScanResultUtil.createQuotedSsid(r.SSID))
+                && ScanResultUtil.isScanResultForPskSaeTransitionNetwork(r));
     }
 
     /** Indicate whether there are OPEN only networks. */
     public boolean isOpenOnlyNetworkInRange(String ssid) {
         return mLastScanResultsMap.values().stream().anyMatch(r ->
-                ssid.equals(ScanResultUtil.createQuotedSsid(r.SSID))
+                ssid.equals(r.getWifiSsid().toString())
                 && ScanResultUtil.isScanResultForOpenNetwork(r)
                 && !ScanResultUtil.isScanResultForOweNetwork(r));
     }
@@ -618,7 +629,7 @@ public class ScanRequestProxy {
     /** Indicate whether there are OWE only networks. */
     public boolean isOweOnlyNetworkInRange(String ssid) {
         return mLastScanResultsMap.values().stream().anyMatch(r ->
-                ssid.equals(ScanResultUtil.createQuotedSsid(r.SSID))
+                ssid.equals(r.getWifiSsid().toString())
                 && ScanResultUtil.isScanResultForOweNetwork(r)
                 && !ScanResultUtil.isScanResultForOweTransitionNetwork(r));
     }
@@ -626,7 +637,7 @@ public class ScanRequestProxy {
     /** Indicate whether there are WPA2 Enterprise only networks. */
     public boolean isWpa2EnterpriseOnlyNetworkInRange(String ssid) {
         return mLastScanResultsMap.values().stream().anyMatch(r ->
-                ssid.equals(ScanResultUtil.createQuotedSsid(r.SSID))
+                ssid.equals(r.getWifiSsid().toString())
                 && ScanResultUtil.isScanResultForEapNetwork(r)
                 && !ScanResultUtil.isScanResultForWpa3EnterpriseTransitionNetwork(r)
                 && !ScanResultUtil.isScanResultForWpa3EnterpriseOnlyNetwork(r));
@@ -635,7 +646,7 @@ public class ScanRequestProxy {
     /** Indicate whether there are WPA3 Enterprise only networks. */
     public boolean isWpa3EnterpriseOnlyNetworkInRange(String ssid) {
         return mLastScanResultsMap.values().stream().anyMatch(r ->
-                ssid.equals(ScanResultUtil.createQuotedSsid(r.SSID))
+                ssid.equals(r.getWifiSsid().toString())
                 && ScanResultUtil.isScanResultForWpa3EnterpriseOnlyNetwork(r)
                 && !ScanResultUtil.isScanResultForWpa3EnterpriseTransitionNetwork(r)
                 && !ScanResultUtil.isScanResultForEapNetwork(r));

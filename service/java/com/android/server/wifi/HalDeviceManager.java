@@ -57,6 +57,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -124,12 +125,9 @@ public class HalDeviceManager {
         mServiceManagerDeathRecipient = new ServiceManagerDeathRecipient();
     }
 
-    /* package */ void enableVerboseLogging(int verbose) {
-        if (verbose > 0) {
-            mDbg = true;
-        } else {
-            mDbg = false;
-        }
+    /* package */ void enableVerboseLogging(boolean verboseEnabled) {
+        mDbg = verboseEnabled;
+
         if (VDBG) {
             mDbg = true; // just override
         }
@@ -1481,6 +1479,7 @@ public class HalDeviceManager {
             mEventHandler.post(() -> {
                 Log.e(TAG, "IWifiEventCallback.onFailure: " + statusString(status));
                 synchronized (mLock) {
+                    mWifi = null;
                     mIsReady = false;
                     teardownInternal();
                 }
@@ -2079,18 +2078,16 @@ public class HalDeviceManager {
         for (WifiIfaceInfo ifaceInfo : ifaceInfosForExistingIfaceType) {
             int newRequestorWsPriority = getRequestorWsPriority(newRequestorWsHelper);
             int existingRequestorWsPriority = getRequestorWsPriority(ifaceInfo.requestorWsHelper);
-            if (allowedToDelete(
-                    requestedIfaceType, newRequestorWsPriority, existingIfaceType,
-                    existingRequestorWsPriority)) {
-                if (mDbg) {
-                    Log.d(TAG, "allowedToDeleteIfaceTypeForRequestedType: Allowed to delete "
-                            + "requestedIfaceType=" + requestedIfaceType
-                            + "existingIfaceType=" + existingIfaceType
-                            + ", newRequestorWsPriority=" + newRequestorWsHelper
-                            + ", existingRequestorWsPriority" + existingRequestorWsPriority);
-                }
-                return true;
+            boolean isAllowedToDelete = allowedToDelete(requestedIfaceType, newRequestorWsPriority,
+                    existingIfaceType, existingRequestorWsPriority);
+            if (mDbg) {
+                Log.d(TAG, "allowedToDeleteIfaceTypeForRequestedType = " + isAllowedToDelete
+                        + " requestedIfaceType=" + requestedIfaceType
+                        + " existingIfaceType=" + existingIfaceType
+                        + ", newRequestorWsPriority=" + newRequestorWsPriority
+                        + ", existingRequestorWsPriority=" + existingRequestorWsPriority);
             }
+            if (isAllowedToDelete) return true;
         }
         return false;
     }
@@ -2105,7 +2102,8 @@ public class HalDeviceManager {
      *      - Else, not allowed to delete.
      *  - Delete ifaces based on the descending requestor priority
      *    (i.e bg app requests are deleted first, privileged app requests are deleted last)
-     *  - If there are > 1 ifaces within the same priority group to delete, select them randomly.
+     *  - If there are > 1 ifaces within the same priority group to delete, later created iface
+     *    is deleted first.
      *
      * @param excessInterfaces Number of interfaces which need to be selected.
      * @param requestedIfaceType Requested iface type.
@@ -2128,7 +2126,9 @@ public class HalDeviceManager {
         boolean lookupError = false;
         // Map of priority levels to ifaces to delete.
         Map<Integer, List<WifiIfaceInfo>> ifacesToDeleteMap = new HashMap<>();
-        for (WifiIfaceInfo info : interfaces) {
+        // Reverse order to make sure later created interfaces deleted firstly
+        for (int i = interfaces.length - 1; i >= 0; i--) {
+            WifiIfaceInfo info = interfaces[i];
             InterfaceCacheEntry cacheEntry;
             synchronized (mLock) {
                 cacheEntry = mInterfaceInfoCache.get(Pair.create(info.name, getType(info.iface)));
@@ -2141,8 +2141,15 @@ public class HalDeviceManager {
             }
             int newRequestorWsPriority = getRequestorWsPriority(newRequestorWsHelper);
             int existingRequestorWsPriority = getRequestorWsPriority(cacheEntry.requestorWsHelper);
-            if (allowedToDelete(requestedIfaceType, newRequestorWsPriority, existingIfaceType,
-                    existingRequestorWsPriority)) {
+            boolean isAllowedToDelete = allowedToDelete(requestedIfaceType, newRequestorWsPriority,
+                    existingIfaceType, existingRequestorWsPriority);
+            if (VDBG) {
+                Log.d(TAG, "info=" + info + ":  allowedToDelete=" + isAllowedToDelete
+                        + " (requestedIfaceType=" + requestedIfaceType + ", newRequestorWsPriority="
+                        + newRequestorWsPriority + ", existingIfaceType=" + existingIfaceType
+                        + ", existingRequestorWsPriority=" + existingRequestorWsPriority + ")");
+            }
+            if (isAllowedToDelete) {
                 ifacesToDeleteMap.computeIfAbsent(
                         existingRequestorWsPriority, v -> new ArrayList<>()).add(info);
             }
@@ -2179,8 +2186,9 @@ public class HalDeviceManager {
     private boolean canIfaceComboSupportRequestedIfaceCombo(
             int[] chipIfaceCombo, int[] requestedIfaceCombo) {
         if (VDBG) {
-            Log.d(TAG, "canIfaceComboSupportRequest: chipIfaceCombo=" + chipIfaceCombo
-                    + ", requestedIfaceCombo=" + requestedIfaceCombo);
+            Log.d(TAG, "canIfaceComboSupportRequestedIfaceCombo: chipIfaceCombo="
+                    + Arrays.toString(chipIfaceCombo)
+                    + ", requestedIfaceCombo=" + Arrays.toString(requestedIfaceCombo));
         }
         for (int ifaceType : IFACE_TYPES_BY_PRIORITY) {
             if (chipIfaceCombo[ifaceType] < requestedIfaceCombo[ifaceType]) {
@@ -2196,7 +2204,7 @@ public class HalDeviceManager {
             long requiredChipCapabilities, int[] ifaceCombo) {
         if (VDBG) {
             Log.d(TAG, "isItPossibleToCreateIfaceCombo: chipInfos=" + Arrays.deepToString(chipInfos)
-                    + ", ifaceType=" + ifaceCombo
+                    + ", ifaceType=" + Arrays.toString(ifaceCombo)
                     + ", requiredChipCapabilities=" + requiredChipCapabilities);
         }
 
@@ -2373,6 +2381,11 @@ public class HalDeviceManager {
                 return false;
             }
 
+            // dispatch listeners on other threads to prevent race conditions in case the HAL is
+            // blocking and they get notification about destruction from HAL before cleaning up
+            // status.
+            dispatchDestroyedListeners(name, type, true);
+
             WifiStatus status = null;
             try {
                 switch (type) {
@@ -2397,7 +2410,7 @@ public class HalDeviceManager {
             }
 
             // dispatch listeners no matter what status
-            dispatchDestroyedListeners(name, type);
+            dispatchDestroyedListeners(name, type, false);
             if (validateRttController) {
                 // Try to update the RttController
                 updateRttControllerWhenInterfaceChanges();
@@ -2413,10 +2426,13 @@ public class HalDeviceManager {
     }
 
     // dispatch all destroyed listeners registered for the specified interface AND remove the
-    // cache entry
-    private void dispatchDestroyedListeners(String name, int type) {
+    // cache entries for the called listeners
+    // onlyOnOtherThreads = true: only call listeners on other threads
+    // onlyOnOtherThreads = false: call all listeners
+    private void dispatchDestroyedListeners(String name, int type, boolean onlyOnOtherThreads) {
         if (VDBG) Log.d(TAG, "dispatchDestroyedListeners: iface(name)=" + name);
 
+        List<InterfaceDestroyedListenerProxy> triggerList = new ArrayList<>();
         synchronized (mLock) {
             InterfaceCacheEntry entry = mInterfaceInfoCache.get(Pair.create(name, type));
             if (entry == null) {
@@ -2424,11 +2440,22 @@ public class HalDeviceManager {
                 return;
             }
 
-            for (InterfaceDestroyedListenerProxy listener : entry.destroyedListeners) {
-                listener.trigger();
+            Iterator<InterfaceDestroyedListenerProxy> iterator =
+                    entry.destroyedListeners.iterator();
+            while (iterator.hasNext()) {
+                InterfaceDestroyedListenerProxy listener = iterator.next();
+                if (!onlyOnOtherThreads || !listener.requestedToRunInCurrentThread()) {
+                    triggerList.add(listener);
+                    iterator.remove();
+                }
             }
-            entry.destroyedListeners.clear(); // for insurance (though cache entry is removed)
-            mInterfaceInfoCache.remove(Pair.create(name, type));
+            if (!onlyOnOtherThreads) { // leave entry until final call to *all* callbacks
+                mInterfaceInfoCache.remove(Pair.create(name, type));
+            }
+        }
+
+        for (InterfaceDestroyedListenerProxy listener : triggerList) {
+            listener.trigger();
         }
     }
 
@@ -2468,44 +2495,34 @@ public class HalDeviceManager {
             return mListener.hashCode();
         }
 
-        void trigger() {
-            if (mHandler != null) {
-                // TODO(b/199792691): The thread check is needed to preserve the existing
-                //  assumptions of synchronous execution of the "onDestroyed" callback as much as
-                //  possible. This is needed to prevent regressions caused by posting to the handler
-                //  thread changing the code execution order.
-                //  When all wifi services (ie. WifiAware, WifiP2p) get moved to the wifi handler
-                //  thread, remove this thread check and the Handler#post() and simply always
-                //  invoke the callback directly.
-                long currentTid = mWifiInjector.getCurrentThreadId();
-                long handlerTid = mHandler.getLooper().getThread().getId();
-                if (currentTid == handlerTid) {
-                    // Already running on the same handler thread. Trigger listener synchronously.
-                    action();
-                } else {
-                    // Current thread is not the thread the listener should be invoked on.
-                    // Post action to the intended thread.
-                    mHandler.post(() -> {
-                        action();
-                    });
-                }
-            } else {
-                action();
-            }
+        public boolean requestedToRunInCurrentThread() {
+            if (mHandler == null) return true;
+            long currentTid = mWifiInjector.getCurrentThreadId();
+            long handlerTid = mHandler.getLooper().getThread().getId();
+            return currentTid == handlerTid;
         }
 
-        void triggerWithArg(boolean arg) {
-            if (mHandler != null) {
-                mHandler.post(() -> {
-                    actionWithArg(arg);
-                });
+        void trigger() {
+            // TODO(b/199792691): The thread check is needed to preserve the existing
+            //  assumptions of synchronous execution of the "onDestroyed" callback as much as
+            //  possible. This is needed to prevent regressions caused by posting to the handler
+            //  thread changing the code execution order.
+            //  When all wifi services (ie. WifiAware, WifiP2p) get moved to the wifi handler
+            //  thread, remove this thread check and the Handler#post() and simply always
+            //  invoke the callback directly.
+            if (requestedToRunInCurrentThread()) {
+                // Already running on the same handler thread. Trigger listener synchronously.
+                action();
             } else {
-                actionWithArg(arg);
+                // Current thread is not the thread the listener should be invoked on.
+                // Post action to the intended thread.
+                mHandler.postAtFrontOfQueue(() -> {
+                    action();
+                });
             }
         }
 
         protected void action() {}
-        protected void actionWithArg(boolean arg) {}
 
         ListenerProxy(LISTENER listener, Handler handler, String tag) {
             mListener = listener;

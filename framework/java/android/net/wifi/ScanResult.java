@@ -48,14 +48,40 @@ import java.util.Objects;
 public final class ScanResult implements Parcelable {
     /**
      * The network name.
+     *
+     * @deprecated Use {@link #getWifiSsid()} instead.
      */
+    @Deprecated
     public String SSID;
 
     /**
      * Ascii encoded SSID. This will replace SSID when we deprecate it. @hide
+     *
+     * @deprecated Use {@link #getWifiSsid()} instead.
      */
-    @UnsupportedAppUsage
+    @Deprecated
+    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.S,
+            publicAlternatives = "{@link #getWifiSsid()}")
     public WifiSsid wifiSsid;
+
+    /**
+     * Set the SSID of the access point.
+     * @hide
+     */
+    @SystemApi
+    public void setWifiSsid(@NonNull WifiSsid ssid) {
+        wifiSsid = ssid;
+        CharSequence utf8Text = wifiSsid.getUtf8Text();
+        SSID = utf8Text != null ? utf8Text.toString() : WifiManager.UNKNOWN_SSID;
+    }
+
+    /**
+     * The SSID of the access point.
+     */
+    @Nullable
+    public WifiSsid getWifiSsid() {
+        return wifiSsid;
+    }
 
     /**
      * The address of the access point.
@@ -333,6 +359,23 @@ public final class ScanResult implements Parcelable {
     * AP Channel bandwidth is 160 MHZ, but 80MHZ + 80MHZ
     */
     public static final int CHANNEL_WIDTH_80MHZ_PLUS_MHZ = 4;
+
+    /**
+     * Preamble type: Legacy.
+     */
+    public static final int PREAMBLE_LEGACY = 0;
+    /**
+     * Preamble type: HT.
+     */
+    public static final int PREAMBLE_HT = 1;
+    /**
+     * Preamble type: VHT.
+     */
+    public static final int PREAMBLE_VHT = 2;
+    /**
+     * Preamble type: HE.
+     */
+    public static final int PREAMBLE_HE = 3;
 
     /**
      * Wi-Fi unknown standard
@@ -859,6 +902,32 @@ public final class ScanResult implements Parcelable {
     }
 
     /**
+     * Returns the band for the ScanResult according to its frequency.
+     * @hide
+     */
+    @WifiBand public static int toBand(int frequency) {
+        if (ScanResult.is24GHz(frequency)) {
+            return ScanResult.WIFI_BAND_24_GHZ;
+        } else if (ScanResult.is5GHz(frequency)) {
+            return ScanResult.WIFI_BAND_5_GHZ;
+        } else if (ScanResult.is6GHz(frequency)) {
+            return ScanResult.WIFI_BAND_6_GHZ;
+        } else if (ScanResult.is60GHz(frequency)) {
+            return ScanResult.WIFI_BAND_60_GHZ;
+        }
+        return ScanResult.UNSPECIFIED;
+    }
+
+    /**
+     * Returns the band for the ScanResult according to its frequency.
+     * @hide
+     */
+    @SystemApi
+    @WifiBand public int getBand() {
+        return ScanResult.toBand(this.frequency);
+    }
+
+    /**
      * @hide
      */
     public boolean is24GHz() {
@@ -1095,13 +1164,29 @@ public final class ScanResult implements Parcelable {
      */
     public AnqpInformationElement[] anqpElements;
 
+    /**
+     * Returns whether a WifiSsid represents a "hidden" SSID of all zero values.
+     */
+    private boolean isHiddenSsid(@NonNull WifiSsid wifiSsid) {
+        for (byte b : wifiSsid.getBytes()) {
+            if (b != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** {@hide} */
     public ScanResult(WifiSsid wifiSsid, String BSSID, long hessid, int anqpDomainId,
             byte[] osuProviders, String caps, int level, int frequency, long tsf) {
         this.wifiSsid = wifiSsid;
-        final String utf8Ssid = (wifiSsid != null) ? wifiSsid.getUtf8Text().toString()
-                : WifiManager.UNKNOWN_SSID;
-        this.SSID = (utf8Ssid != null) ? utf8Ssid : WifiManager.UNKNOWN_SSID;
+        if (wifiSsid != null && isHiddenSsid(wifiSsid)) {
+            // Retain the legacy behavior of setting SSID to "" if the SSID is all zero values.
+            this.SSID = "";
+        } else {
+            final CharSequence utf8Ssid = (wifiSsid != null) ? wifiSsid.getUtf8Text() : null;
+            this.SSID = (utf8Ssid != null) ? utf8Ssid.toString() : WifiManager.UNKNOWN_SSID;
+        }
         this.BSSID = BSSID;
         this.hessid = hessid;
         this.anqpDomainId = anqpDomainId;
@@ -1129,9 +1214,13 @@ public final class ScanResult implements Parcelable {
     public ScanResult(WifiSsid wifiSsid, String BSSID, String caps, int level, int frequency,
             long tsf, int distCm, int distSdCm) {
         this.wifiSsid = wifiSsid;
-        final String utf8Ssid = (wifiSsid != null) ? wifiSsid.getUtf8Text().toString()
-                : WifiManager.UNKNOWN_SSID;
-        this.SSID = (utf8Ssid != null) ? utf8Ssid : WifiManager.UNKNOWN_SSID;
+        if (wifiSsid != null && isHiddenSsid(wifiSsid)) {
+            // Retain the legacy behavior of setting SSID to "" if the SSID is all zero values.
+            this.SSID = "";
+        } else {
+            final CharSequence utf8Ssid = (wifiSsid != null) ? wifiSsid.getUtf8Text() : null;
+            this.SSID = (utf8Ssid != null) ? utf8Ssid.toString() : WifiManager.UNKNOWN_SSID;
+        }
         this.BSSID = BSSID;
         this.capabilities = caps;
         this.level = level;

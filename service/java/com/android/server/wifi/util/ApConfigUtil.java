@@ -189,6 +189,20 @@ public class ApConfigUtil {
     }
 
     /**
+     * Add 5Ghz to target band when 5Ghz SoftAp supported.
+     *
+     * @param targetBand The band is needed to add 5GHz band.
+     * @return The band includes 5Ghz when 5G SoftAp supported.
+     */
+    public static @BandType int append5GToBandIf5GSupported(@BandType int targetBand,
+            Context context) {
+        if (isBandSupported(SoftApConfiguration.BAND_5GHZ, context)) {
+            return targetBand | SoftApConfiguration.BAND_5GHZ;
+        }
+        return targetBand;
+    }
+
+    /**
      * Checks if band is a valid combination of {link  SoftApConfiguration#BandType} values
      */
     public static boolean isBandValid(@BandType int band) {
@@ -367,10 +381,18 @@ public class ApConfigUtil {
         int[] regulatoryArray = wifiNative.getChannelsForBand(scannerBand);
         List<Integer> regulatoryList = new ArrayList<Integer>();
         for (int freq : regulatoryArray) {
-            if (inFrequencyMHz) {
-                regulatoryList.add(freq);
-            } else {
-                regulatoryList.add(ScanResult.convertFrequencyMhzToChannelIfSupported(freq));
+            regulatoryList.add(inFrequencyMHz
+                    ? freq : ScanResult.convertFrequencyMhzToChannelIfSupported(freq));
+        }
+
+        // Add DFS channels to the supported channel list if the device supports SoftAp operation
+        // in the DFS channel.
+        if (resources.getBoolean(R.bool.config_wifiSoftapAcsIncludeDfs)
+                && scannerBand == WifiScanner.WIFI_BAND_5_GHZ) {
+            regulatoryArray = wifiNative.getChannelsForBand(WifiScanner.WIFI_BAND_5_GHZ_DFS_ONLY);
+            for (int freq : regulatoryArray) {
+                regulatoryList.add(inFrequencyMHz
+                        ? freq : ScanResult.convertFrequencyMhzToChannelIfSupported(freq));
             }
         }
 
@@ -592,6 +614,9 @@ public class ApConfigUtil {
             @NonNull WifiConfiguration wifiConfig) {
         SoftApConfiguration.Builder configBuilder = new SoftApConfiguration.Builder();
         try {
+            // WifiConfiguration#SSID uses a formatted string with double quotes for UTF-8 and no
+            // quotes for hexadecimal. But to support legacy behavior, we need to continue
+            // setting the entire string with quotes as the UTF-8 SSID.
             configBuilder.setSsid(wifiConfig.SSID);
             if (wifiConfig.getAuthType() == WifiConfiguration.KeyMgmt.WPA2_PSK) {
                 configBuilder.setPassphrase(wifiConfig.preSharedKey,
@@ -853,7 +878,7 @@ public class ApConfigUtil {
      */
     public static boolean checkConfigurationChangeNeedToRestart(
             SoftApConfiguration currentConfig, SoftApConfiguration newConfig) {
-        return !Objects.equals(currentConfig.getSsid(), newConfig.getSsid())
+        return !Objects.equals(currentConfig.getWifiSsid(), newConfig.getWifiSsid())
                 || !Objects.equals(currentConfig.getBssid(), newConfig.getBssid())
                 || currentConfig.getSecurityType() != newConfig.getSecurityType()
                 || !Objects.equals(currentConfig.getPassphrase(), newConfig.getPassphrase())
@@ -893,11 +918,9 @@ public class ApConfigUtil {
         // The bands length should always 1 in R. Adding SdkLevel.isAtLeastS for lint check only.
         if (config.getBands().length > 1 && SdkLevel.isAtLeastS()) {
             int[] bands = config.getBands();
-            if ((bands[0] & SoftApConfiguration.BAND_6GHZ) != 0
-                    || (bands[0] & SoftApConfiguration.BAND_60GHZ) != 0
-                    || (bands[1] & SoftApConfiguration.BAND_6GHZ) != 0
+            if ((bands[0] & SoftApConfiguration.BAND_60GHZ) != 0
                     || (bands[1] & SoftApConfiguration.BAND_60GHZ) != 0) {
-                Log.d(TAG, "Error, dual APs doesn't support on 6GHz and 60GHz");
+                Log.d(TAG, "Error, dual APs doesn't support on 60GHz");
                 return false;
             }
             if (!capability.areFeaturesSupported(SoftApCapability.SOFTAP_FEATURE_ACS_OFFLOAD)
@@ -1001,5 +1024,60 @@ public class ApConfigUtil {
             deepCopyMap.put(entry.getKey(), clients);
         }
         return deepCopyMap;
+    }
+
+
+    /**
+     * Observer the available channel from native layer (wificond) and update the SoftApCapability
+     *
+     * @param softApCapability the current softap capability
+     * @param context the caller context used to get value from resource file
+     * @param wifiNative reference used to collect regulatory restrictions.
+     *
+     * @return updated soft AP capability
+     */
+    public static SoftApCapability updateSoftApCapabilityWithAvailableChannelList(
+                @NonNull SoftApCapability softApCapability, @NonNull Context context,
+                @NonNull WifiNative wifiNative) {
+        SoftApCapability newSoftApCapability = new SoftApCapability(softApCapability);
+        List<Integer> supportedChannelList = null;
+        if (isSoftAp24GhzSupported(context)) {
+            supportedChannelList = getAvailableChannelFreqsForBand(
+                    SoftApConfiguration.BAND_2GHZ, wifiNative, context.getResources(), false);
+            if (supportedChannelList != null) {
+                newSoftApCapability.setSupportedChannelList(
+                        SoftApConfiguration.BAND_2GHZ,
+                        supportedChannelList.stream().mapToInt(Integer::intValue).toArray());
+            }
+        }
+        if (isSoftAp5GhzSupported(context)) {
+            supportedChannelList = getAvailableChannelFreqsForBand(
+                    SoftApConfiguration.BAND_5GHZ, wifiNative, context.getResources(), false);
+            if (supportedChannelList != null) {
+                newSoftApCapability.setSupportedChannelList(
+                        SoftApConfiguration.BAND_5GHZ,
+                        supportedChannelList.stream().mapToInt(Integer::intValue).toArray());
+            }
+        }
+        if (isSoftAp6GhzSupported(context)) {
+            supportedChannelList = getAvailableChannelFreqsForBand(
+                    SoftApConfiguration.BAND_6GHZ, wifiNative, context.getResources(), false);
+            if (supportedChannelList != null) {
+                newSoftApCapability.setSupportedChannelList(
+                        SoftApConfiguration.BAND_6GHZ,
+                        supportedChannelList.stream().mapToInt(Integer::intValue).toArray());
+            }
+        }
+        if (isSoftAp60GhzSupported(context)) {
+            supportedChannelList = getAvailableChannelFreqsForBand(
+                    SoftApConfiguration.BAND_60GHZ, wifiNative, context.getResources(),
+                    false);
+            if (supportedChannelList != null) {
+                newSoftApCapability.setSupportedChannelList(
+                        SoftApConfiguration.BAND_60GHZ,
+                        supportedChannelList.stream().mapToInt(Integer::intValue).toArray());
+            }
+        }
+        return newSoftApCapability;
     }
 }
