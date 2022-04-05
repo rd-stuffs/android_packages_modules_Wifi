@@ -151,6 +151,9 @@
          If both APs in Dual AP mode are idle, it shuts down the AP in higher band. -->
     <integer translatable="false" name="config_wifiFrameworkSoftApShutDownIdleInstanceInBridgedModeTimeoutMillisecond">300000</integer>
 
+    <!-- boolean indicating whether or not to disable shutdown idle instance timer in the bridged mode when charging -->
+    <bool translatable="false" name ="config_wifiFrameworkSoftApDisableBridgedModeShutdownIdleInstanceWhenCharging">false</bool>
+
     <!-- Integer indicating maximum hardware supported client number of soft ap -->
     <integer translatable="false" name="config_wifiHardwareSoftapMaxClientCount">16</integer>
 
@@ -229,6 +232,15 @@
     <!-- Integer for maximum age for scan results used to identify channels for partial initial
          scan in minutes -->
     <integer translatable="false" name="config_wifiInitialPartialScanChannelCacheAgeMins">14400</integer>
+
+    <!-- Boolean indicating connected frequency enhancement is enabled/disabled -->
+    <bool translatable="false" name="config_wifiConnectedFrequencyEnhancementEnabled">false</bool>
+
+    <!-- Integer for maximum age for saved channels retrieve to do pno scan in minutes -->
+    <integer translatable="false" name="config_wifiPnoScanCacheAgeMins">4320</integer>
+
+    <!-- Integer for maximum number of channels per network used for pno scan -->
+    <integer translatable="false" name="config_wifiFrameworkMaxNumofChannelsPerNetwork">5</integer>
 
     <!-- Wifi driver supports Beacon Protection for SoftAp -->
     <bool translatable="false" name="config_vendor_softap_beacon_protection_supported">false</bool>
@@ -784,6 +796,12 @@
     <!-- Indicate the number of networks to restore in a batch. 0 : all networks in a batch -->
     <integer translatable="false" name="config_wifiConfigurationRestoreNetworksBatchNum">50</integer>
 
+    <!-- OEM privileged WiFi admin package names. Empty by default-->
+    <string-array translatable="false" name="config_oemPrivilegedWifiAdminPackages">
+        <!-- Add package names here, example: -->
+        <!-- <item>com.something.manager</item> -->
+    </string-array>
+
     <!-- Wifi driver supports Opportunistic Wireless Encryption (OWE) Transition
          aka Enhanced Open for Soft-AP -->
     <bool translatable="false" name="config_wifiSoftapOweTransitionSupported">false</bool>
@@ -795,8 +813,43 @@
     <!-- Indicate the gravity of Wifi dialogs. Must be an integer corresponding to a
          android.view.Gravity.GravityFlags constant. Default = Gravity.NO_GRAVITY (0) -->
     <integer translatable="false" name="config_wifiDialogGravity">0</integer>
-
+    <!-- Whether to show a confirmation dialog to the user if a third party app targeting below SDK
+         level Q tries to enable Wi-Fi -->
+    <bool translatable="false" name="config_showConfirmationDialogForThirdPartyAppsEnablingWifi">false</bool>
     <!-- Indicate the time in milliseconds to wait before auto-cancelling a P2P invitation received
          dialog that the user has not responded to. A value of 0 indicates no timeout. -->
     <integer translatable="false" name="config_p2pInvitationReceivedDialogTimeoutMs">0</integer>
+    <!-- Indicates whether or not to play a notification sound upon displaying a P2P invitation
+         received dialog that the user has not responded to. If the device is in vibrate mode, then
+         the device will vibrate instead of playing a sound. -->
+    <bool translatable="false" name="config_p2pInvitationReceivedDialogNotificationSound">false</bool>
+
+    <!-- Indicates whether or not the Soft AP needs to be restarted when country code changed -->
+    <bool translatable="false" name="config_wifiForcedSoftApRestartWhenCountryCodeChanged">true</bool>
+
+    <!-- list of package names that HalDeviceManager (interface priority decision maker) will
+         treat as foreground, even if they are in the background. -->
+    <string-array translatable="false" name="config_wifiInterfacePriorityTreatAsForegroundList">
+        <!-- Below is a sample configuration for this list:
+        <item>com.company1.example.test.name1</item>
+        <item>com.company2.example.test.name2</item>
+        -->
+    </string-array>
+
+    <!-- Indicates whether or not user approval is required for device-to-device interface priority
+         decisions (note: packages included in
+         `config_excludedFromUserApprovalForD2dInterfacePriority` are excluded). -->
+    <bool translatable="false" name="config_wifiUserApprovalRequiredForD2dInterfacePriority">false</bool>
+    <!-- list of package names that are excluded from the user approval flag
+         `config_wifiUserApprovalRequiredForD2dInterfacePriority`. I.e. any priority conflicts from
+          requests by these packages will be handled by the default resolution of the framework. -->
+    <string-array translatable="false" name="config_wifiExcludedFromUserApprovalForD2dInterfacePriority">
+        <!-- Below is a sample configuration for this list:
+        <item>com.company1.example.test.name1</item>
+        <item>com.company2.example.test.name2</item>
+        -->
+    </string-array>
+
+    <!-- boolean indicating whether the Easy Connect (DPP) AKM is supported -->
+    <bool translatable="false" name ="config_wifiDppAkmSupported">false</bool>
 </resources>

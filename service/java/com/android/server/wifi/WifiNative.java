@@ -18,6 +18,8 @@ package com.android.server.wifi;
 
 import static android.net.wifi.WifiManager.WIFI_FEATURE_OWE;
 
+import static com.android.server.wifi.WifiSettingsConfigStore.WIFI_NATIVE_SUPPORTED_FEATURES;
+
 import android.annotation.IntDef;
 import android.annotation.NonNull;
 import android.annotation.Nullable;
@@ -104,6 +106,7 @@ public class WifiNative {
     private CountryCodeChangeListenerInternal mCountryCodeChangeListener;
     private boolean mUseFakeScanDetails;
     private final ArrayList<ScanDetail> mFakeScanDetails = new ArrayList<>();
+    private long mCachedFeatureSet;
 
     public WifiNative(WifiVendorHal vendorHal,
                       SupplicantStaIfaceHal staIfaceHal, HostapdHal hostapdHal,
@@ -1239,6 +1242,7 @@ public class WifiNative {
             Log.i(TAG, "Successfully setup " + iface);
 
             iface.featureSet = getSupportedFeatureSetInternal(iface.name);
+            saveCompleteFeatureSetInConfigStoreIfNecessary(iface.featureSet);
             mIsEnhancedOpenSupported = (iface.featureSet & WIFI_FEATURE_OWE) != 0;
             return iface.name;
         }
@@ -1464,6 +1468,7 @@ public class WifiNative {
             }
             iface.type = Iface.IFACE_TYPE_STA_FOR_CONNECTIVITY;
             iface.featureSet = getSupportedFeatureSetInternal(iface.name);
+            saveCompleteFeatureSetInConfigStoreIfNecessary(iface.featureSet);
             mIsEnhancedOpenSupported = (iface.featureSet & WIFI_FEATURE_OWE) != 0;
             Log.i(TAG, "Successfully switched to connectivity mode on iface=" + iface);
             return true;
@@ -1761,6 +1766,14 @@ public class WifiNative {
                 WifiNl80211Manager.SCAN_TYPE_PNO_SCAN));
     }
 
+    /**
+     * Get the max number of SSIDs that the driver supports per scan.
+     * @param ifaceName Name of the interface.
+     */
+    public int getMaxNumScanSsids(@NonNull String ifaceName) {
+        return mWifiCondManager.getMaxNumScanSsids(ifaceName);
+    }
+
     private ArrayList<ScanDetail> convertNativeScanResults(@NonNull String ifaceName,
             List<NativeScanResult> nativeResults) {
         ArrayList<ScanDetail> results = new ArrayList<>();
@@ -1804,6 +1817,12 @@ public class WifiNative {
                 scanResult.radioChainInfos[idx].level = nativeRadioChainInfo.getLevelDbm();
                 idx++;
             }
+
+            // Fill MLO Attributes
+            scanResult.setApMldMacAddress(networkDetail.getMldMacAddress());
+            scanResult.setApMloLinkId(networkDetail.getMloLinkId());
+            scanResult.setAffiliatedMloLinks(networkDetail.getAffiliatedMloLinks());
+
             results.add(scanDetail);
         }
         if (mVerboseLoggingEnabled) {
@@ -3361,6 +3380,15 @@ public class WifiNative {
     }
 
     /**
+     * Returns whether a new AP iface can be created or not.
+     */
+    public boolean isItPossibleToCreateBridgedApIface(@NonNull WorkSource requestorWs) {
+        synchronized (mLock) {
+            return mWifiVendorHal.isItPossibleToCreateBridgedApIface(requestorWs);
+        }
+    }
+
+    /**
      * Returns whether a new STA iface can be created or not.
      */
     public boolean isItPossibleToCreateStaIface(@NonNull WorkSource requestorWs) {
@@ -3409,15 +3437,22 @@ public class WifiNative {
      * @param ifaceName Name of the interface.
      * @return bitmask defined by WifiManager.WIFI_FEATURE_*
      */
-    public long getSupportedFeatureSet(@NonNull String ifaceName) {
+    public long getSupportedFeatureSet(String ifaceName) {
         synchronized (mLock) {
-            Iface iface = mIfaceMgr.getIface(ifaceName);
-            if (iface == null) {
-                Log.e(TAG, "Could not get Iface object for interface " + ifaceName);
-                return 0;
+            long featureSet = 0;
+            // First get the complete feature set stored in config store when supplicant was
+            // started
+            featureSet = getCompleteFeatureSetFromConfigStore();
+            // Include the feature set saved in interface class. This is to make sure that
+            // framework is returning the feature set for SoftAp only products and multi-chip
+            // products.
+            if (ifaceName != null) {
+                Iface iface = mIfaceMgr.getIface(ifaceName);
+                if (iface != null) {
+                    featureSet |= iface.featureSet;
+                }
             }
-
-            return iface.featureSet;
+            return featureSet;
         }
     }
 
@@ -3459,6 +3494,39 @@ public class WifiNative {
      */
     public ConnectionCapabilities getConnectionCapabilities(@NonNull String ifaceName) {
         return mSupplicantStaIfaceHal.getConnectionCapabilities(ifaceName);
+    }
+
+    /**
+     * Class to represent a connection MLO Link
+     */
+    public static class ConnectionMloLink {
+        public int linkId;
+        public MacAddress staMacAddress;
+
+        ConnectionMloLink() {
+            // Nothing for now
+        };
+    }
+
+    /**
+     * Class to represent the MLO links info for a connection that is collected after association
+     */
+    public static class ConnectionMloLinksInfo {
+        public ConnectionMloLink[] links;
+
+        ConnectionMloLinksInfo() {
+            // Nothing for now
+        }
+    }
+
+    /**
+     * Returns connection MLO Links Info.
+     *
+     * @param ifaceName Name of the interface.
+     * @return connection MLO Links Info
+     */
+    public ConnectionMloLinksInfo getConnectionMloLinksInfo(@NonNull String ifaceName) {
+        return mSupplicantStaIfaceHal.getConnectionMloLinksInfo(ifaceName);
     }
 
     /**
@@ -4411,9 +4479,37 @@ public class WifiNative {
      */
     public void countryCodeChanged(String countryCode) {
         if (SdkLevel.isAtLeastT()) {
-            if (!mWifiCondManager.notifyCountryCodeChanged()) {
-                Log.e(TAG, "Fail to notify wificond country code changed to " + countryCode);
+            try {
+                mWifiCondManager.notifyCountryCodeChanged(countryCode);
+            } catch (RuntimeException re) {
+                Log.e(TAG, "Fail to notify wificond country code changed to " + countryCode
+                        + "because exception happened:" + re);
             }
         }
+    }
+
+    /**
+     * Save the complete list of features retrieved from WiFi HAL and Supplicant HAL in
+     * config store.
+     */
+    private void saveCompleteFeatureSetInConfigStoreIfNecessary(long featureSet) {
+        long cachedFeatureSet = getCompleteFeatureSetFromConfigStore();
+        if (cachedFeatureSet != featureSet) {
+            mCachedFeatureSet = featureSet;
+            mWifiInjector.getSettingsConfigStore()
+                    .put(WIFI_NATIVE_SUPPORTED_FEATURES, mCachedFeatureSet);
+            Log.i(TAG, "Supported features is updated in config store: " + mCachedFeatureSet);
+        }
+    }
+
+    /**
+     * Get the feature set from cache/config store
+     */
+    private long getCompleteFeatureSetFromConfigStore() {
+        if (mCachedFeatureSet == 0) {
+            mCachedFeatureSet = mWifiInjector.getSettingsConfigStore()
+                    .get(WIFI_NATIVE_SUPPORTED_FEATURES);
+        }
+        return mCachedFeatureSet;
     }
 }

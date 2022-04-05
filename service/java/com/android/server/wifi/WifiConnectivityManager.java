@@ -545,7 +545,15 @@ public class WifiConnectivityManager {
         }
 
         // Check if any blocklisted BSSIDs can be freed.
-        mWifiBlocklistMonitor.tryEnablingBlockedBssids(scanDetails);
+        List<ScanDetail> enabledDetails =
+                mWifiBlocklistMonitor.tryEnablingBlockedBssids(scanDetails);
+        for (ScanDetail scanDetail : enabledDetails) {
+            WifiConfiguration config = mConfigManager.getSavedNetworkForScanDetail(scanDetail);
+            if (config != null) {
+                mConfigManager.updateNetworkSelectionStatus(config.networkId,
+                        WifiConfiguration.NetworkSelectionStatus.DISABLED_NONE);
+            }
+        }
         Set<String> bssidBlocklist = mWifiBlocklistMonitor.updateAndGetBssidBlocklistForSsids(
                 connectedSsids);
         updateUserDisabledList(scanDetails);
@@ -1711,6 +1719,23 @@ public class WifiConnectivityManager {
     }
 
     /**
+     * Add the channels into the channel set with a size limit.
+     * @param channelSet Target set for adding channel to.
+     * @param config Network for query channel from ConnectedFrequencyManagaer
+     * @param ageInMillis Only consider channel info whose timestamps are younger than this value.
+     * @return True if all available channels for this network are added, otherwise false.
+     */
+    private boolean addChannelFromWifiConfigStore(@NonNull Set<Integer> channelSet,
+            @NonNull WifiConfiguration config, long ageInMillis) {
+        List<Integer> frequencies = mConfigManager.connectedFreqList(config.getProfileKey(), ageInMillis);
+        if (frequencies == null) return false;
+        for (Integer channel : frequencies) {
+            channelSet.add(channel);
+        }
+        return true;
+    }
+
+    /**
      * Fetch channel set for target network.
      */
     @VisibleForTesting
@@ -2016,9 +2041,10 @@ public class WifiConnectivityManager {
         settings.numBssidsPerScan = 0;
         settings.hiddenNetworks.clear();
         // retrieve the list of hidden network SSIDs from saved network to scan for
-        settings.hiddenNetworks.addAll(mConfigManager.retrieveHiddenNetworkList());
+        settings.hiddenNetworks.addAll(mConfigManager.retrieveHiddenNetworkList(true));
         // retrieve the list of hidden network SSIDs from Network suggestion to scan for
-        settings.hiddenNetworks.addAll(mWifiNetworkSuggestionsManager.retrieveHiddenNetworkList());
+        settings.hiddenNetworks.addAll(
+                mWifiNetworkSuggestionsManager.retrieveHiddenNetworkList(true));
 
         SingleScanListener singleScanListener =
                 new SingleScanListener(isFullBandScan);
@@ -2071,8 +2097,8 @@ public class WifiConnectivityManager {
     /**
      * Sets the external scan schedule and scan type.
      */
-    public void setExternalScreenOnScanSchedule(int[] scanSchedule, int[] scanType) {
-        mExternalSingleScanScheduleSec = scanSchedule;
+    public void setExternalScreenOnScanSchedule(int[] scanScheduleSeconds, int[] scanType) {
+        mExternalSingleScanScheduleSec = scanScheduleSeconds;
         mExternalSingleScanType = scanType;
     }
 
@@ -2154,8 +2180,10 @@ public class WifiConnectivityManager {
     private @NonNull List<WifiConfiguration> getAllScanOptimizationNetworks() {
         List<WifiConfiguration> networks = mConfigManager.getSavedNetworks(-1);
         networks.addAll(mWifiNetworkSuggestionsManager.getAllScanOptimizationSuggestionNetworks());
-        // remove all auto-join disabled or network selection disabled network.
+        // remove all saved but never connected, auto-join disabled, or network selection disabled
+        // networks.
         networks.removeIf(config -> !config.allowAutojoin
+                || (!config.ephemeral && !config.getNetworkSelectionStatus().hasEverConnected())
                 || !config.getNetworkSelectionStatus().isNetworkEnabled()
                 || mConfigManager.isNetworkTemporarilyDisabledByUser(
                         config.isPasspoint() ? config.FQDN : config.SSID));
@@ -2217,6 +2245,14 @@ public class WifiConnectivityManager {
         boolean pnoFrequencyCullingEnabled = mContext.getResources()
                 .getBoolean(R.bool.config_wifiPnoFrequencyCullingEnabled);
 
+        boolean isConnectedFreqEnhancementEnable = mContext.getResources().getBoolean(
+                R.bool.config_wifiConnectedFrequencyEnhancementEnabled);
+        long ageInMillis = (long) (1000 * 60 * (long) mContext.getResources().getInteger(
+                    R.integer.config_wifiPnoScanCacheAgeMins));
+        if (mVerboseLoggingEnabled) {
+            Log.d(TAG, "Connected frequency enhancement is: " + isConnectedFreqEnhancementEnable +
+                    " maximum age for saved channels retrieve in millis: " + ageInMillis);
+        }
         List<PnoSettings.PnoNetwork> pnoList = new ArrayList<>();
         Set<String> pnoSet = new HashSet<>();
 
@@ -2249,8 +2285,12 @@ public class WifiConnectivityManager {
                 continue;
             }
             Set<Integer> channelList = new HashSet<>();
-            addChannelFromWifiScoreCard(channelList, config.SSID, 0,
-                    MAX_PNO_SCAN_FREQUENCY_AGE_MS);
+            if (isConnectedFreqEnhancementEnable) {
+                addChannelFromWifiConfigStore(channelList, config, ageInMillis);
+            } else {
+                addChannelFromWifiScoreCard(channelList, config.SSID, 0,
+                        MAX_PNO_SCAN_FREQUENCY_AGE_MS);
+            }
             pnoNetwork.frequencies = channelList.stream().mapToInt(Integer::intValue).toArray();
         }
         return pnoList;
@@ -2956,6 +2996,13 @@ public class WifiConnectivityManager {
             mAutoJoinEnabledExternal = enable;
             checkAllStatesAndEnableAutoJoin();
         }
+    }
+
+    /**
+     * Return whether auto join is on/off
+     */
+    public boolean getAutoJoinEnabledExternal() {
+        return mAutoJoinEnabledExternal;
     }
 
     /**

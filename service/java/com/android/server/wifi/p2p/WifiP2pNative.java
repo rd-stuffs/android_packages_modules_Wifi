@@ -20,6 +20,7 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.hardware.wifi.V1_0.IWifiP2pIface;
 import android.net.wifi.CoexUnsafeChannel;
+import android.net.wifi.ScanResult;
 import android.net.wifi.nl80211.WifiNl80211Manager;
 import android.net.wifi.p2p.WifiP2pConfig;
 import android.net.wifi.p2p.WifiP2pGroup;
@@ -27,6 +28,7 @@ import android.net.wifi.p2p.WifiP2pGroupList;
 import android.net.wifi.p2p.WifiP2pManager;
 import android.net.wifi.p2p.nsd.WifiP2pServiceInfo;
 import android.os.Handler;
+import android.os.Process;
 import android.os.WorkSource;
 import android.text.TextUtils;
 import android.util.Log;
@@ -36,6 +38,7 @@ import com.android.server.wifi.PropertyService;
 import com.android.server.wifi.WifiNative;
 import com.android.server.wifi.WifiVendorHal;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -54,6 +57,9 @@ public class WifiP2pNative {
     private final WifiVendorHal mWifiVendorHal;
     private IWifiP2pIface mIWifiP2pIface;
     private InterfaceDestroyedListenerInternal mInterfaceDestroyedListener;
+    // Cache the features and return it when P2P interface is not up.
+    private long mSupportedFeatures = -1L;
+
 
     // Internal callback registered to HalDeviceManager.
     private class InterfaceDestroyedListenerInternal implements
@@ -187,12 +193,13 @@ public class WifiP2pNative {
      * @param requestorWs Worksource to attribute the request to.
      */
     public String setupInterface(
-            @NonNull HalDeviceManager.InterfaceDestroyedListener destroyedListener,
+            @Nullable HalDeviceManager.InterfaceDestroyedListener destroyedListener,
             @NonNull Handler handler, @NonNull WorkSource requestorWs) {
         Log.d(TAG, "Setup P2P interface");
         if (mIWifiP2pIface == null) {
-            mInterfaceDestroyedListener =
-                    new InterfaceDestroyedListenerInternal(destroyedListener);
+            mInterfaceDestroyedListener = (null == destroyedListener)
+                    ? null
+                    : new InterfaceDestroyedListenerInternal(destroyedListener);
             String ifaceName = createP2pIface(handler, requestorWs);
             if (ifaceName == null) {
                 Log.e(TAG, "Failed to create P2p iface");
@@ -208,6 +215,7 @@ public class WifiP2pNative {
                 teardownInterface();
                 return null;
             }
+            mSupportedFeatures = mSupplicantP2pIfaceHal.getSupportedFeatures();
             Log.i(TAG, "P2P interface setup completed");
             return ifaceName;
         } else {
@@ -227,13 +235,17 @@ public class WifiP2pNative {
             if (mIWifiP2pIface != null) {
                 String ifaceName = HalDeviceManager.getName(mIWifiP2pIface);
                 mHalDeviceManager.removeIface(mIWifiP2pIface);
-                mInterfaceDestroyedListener.teardownAndInvalidate(ifaceName);
+                if (null != mInterfaceDestroyedListener) {
+                    mInterfaceDestroyedListener.teardownAndInvalidate(ifaceName);
+                }
                 Log.i(TAG, "P2P interface teardown completed");
             }
         } else {
             Log.i(TAG, "HAL is not supported. Destroy listener for the interface.");
             String ifaceName = mPropertyService.getString(P2P_INTERFACE_PROPERTY, P2P_IFACE_NAME);
-            mInterfaceDestroyedListener.teardownAndInvalidate(ifaceName);
+            if (null != mInterfaceDestroyedListener) {
+                mInterfaceDestroyedListener.teardownAndInvalidate(ifaceName);
+            }
         }
     }
 
@@ -248,6 +260,30 @@ public class WifiP2pNative {
             Log.i(TAG, "HAL is not supported. Ignore replace requestorWs");
             return true;
         }
+    }
+
+    /**
+     * Get the supported features.
+     *
+     * The features are stored once P2P interface is up so it can be used
+     * when P2P interface is down due to idle shutdown.
+     *
+     * @return bitmask defined by WifiP2pManager.FEATURE_*
+     */
+    public long getSupportedFeatures() {
+        if (-1L != mSupportedFeatures) return mSupportedFeatures;
+
+        Log.i(TAG, "Set up a temporary P2P interface to get supported features.");
+        // Try to set up a temporary interface to get supported features.
+        WorkSource ws =  new WorkSource(Process.SYSTEM_UID);
+        String ifname = setupInterface(null, null, ws);
+        if (TextUtils.isEmpty(ifname)) {
+            Log.e(TAG, "Cannot set up a temporary P2P interface.");
+            return 0L;
+        }
+        teardownInterface();
+        mIWifiP2pIface = null;
+        return mSupportedFeatures;
     }
 
     /**
@@ -868,5 +904,23 @@ public class WifiP2pNative {
     public boolean removeClient(String peerAddress) {
         // The client is deemed as a P2P client, not a legacy client, hence the false.
         return mSupplicantP2pIfaceHal.removeClient(peerAddress, false);
+    }
+
+    /**
+     * Set vendor-specific information elements to the native service.
+     *
+     * @param vendorElements the vendor opaque data.
+     * @return true, if opeartion was successful.
+     */
+    public boolean setVendorElements(Set<ScanResult.InformationElement> vendorElements) {
+        return mSupplicantP2pIfaceHal.setVendorElements(vendorElements);
+    }
+
+    /**
+     * Remove vendor-specific information elements from the native service.
+     */
+    public boolean removeVendorElements() {
+        return mSupplicantP2pIfaceHal.setVendorElements(
+                new HashSet<ScanResult.InformationElement>());
     }
 }

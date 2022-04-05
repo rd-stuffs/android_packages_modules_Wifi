@@ -335,6 +335,11 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         when(mWifiPermissionsUtil.isAdmin(anyInt(), any())).thenReturn(result);
     }
 
+    private void mockIsOrganizationOwnedDeviceAdmin(boolean result) {
+        when(mWifiPermissionsUtil.isOrganizationOwnedDeviceAdmin(anyInt(), any()))
+                .thenReturn(result);
+    }
+
     /**
      * Called after each test
      */
@@ -762,16 +767,16 @@ public class WifiConfigManagerTest extends WifiBaseTest {
     }
 
     /**
-     * Verifies that the device owner could modify other other fields in the Wificonfiguration
-     * but not the macRandomizationSetting field for networks they do not own.
+     * Verifies that the organization owned device admin could modify other other fields in the
+     * Wificonfiguration but not the macRandomizationSetting field for networks they do not own.
      */
     @Test
-    public void testCannotUpdateMacRandomizationSettingWithoutPermission() {
+    public void testCannotUpdateMacRandomizationSettingWithoutPermissionDO() {
         ArgumentCaptor<WifiConfiguration> wifiConfigCaptor =
                 ArgumentCaptor.forClass(WifiConfiguration.class);
         when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(false);
         when(mWifiPermissionsUtil.checkNetworkSetupWizardPermission(anyInt())).thenReturn(false);
-        mockIsDeviceOwner(true);
+        mockIsOrganizationOwnedDeviceAdmin(true);
         WifiConfiguration openNetwork = WifiConfigurationTestUtil.createOpenNetwork();
         openNetwork.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_AUTO;
 
@@ -802,7 +807,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 ArgumentCaptor.forClass(WifiConfiguration.class);
         when(mWifiPermissionsUtil.checkNetworkSettingsPermission(anyInt())).thenReturn(false);
         when(mWifiPermissionsUtil.checkNetworkSetupWizardPermission(anyInt())).thenReturn(false);
-        mockIsDeviceOwner(true);
+        mockIsOrganizationOwnedDeviceAdmin(true);
         mockIsAdmin(true);
         WifiConfiguration openNetwork = WifiConfigurationTestUtil.createOpenNetwork();
         openNetwork.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_NONE;
@@ -4289,6 +4294,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
         WifiConfiguration network1 = WifiConfigurationTestUtil.createWepHiddenNetwork();
         WifiConfiguration network2 = WifiConfigurationTestUtil.createPskHiddenNetwork();
         WifiConfiguration network3 = WifiConfigurationTestUtil.createOpenHiddenNetwork();
+        network3.allowAutojoin = false;
         verifyAddNetworkToWifiConfigManager(network1);
         verifyAddNetworkToWifiConfigManager(network2);
         verifyAddNetworkToWifiConfigManager(network3);
@@ -4303,11 +4309,16 @@ public class WifiConfigManagerTest extends WifiBaseTest {
 
         // Retrieve the hidden network list & verify the order of the networks returned.
         List<WifiScanner.ScanSettings.HiddenNetwork> hiddenNetworks =
-                mWifiConfigManager.retrieveHiddenNetworkList();
+                mWifiConfigManager.retrieveHiddenNetworkList(false);
         assertEquals(3, hiddenNetworks.size());
         assertEquals(network3.SSID, hiddenNetworks.get(0).ssid);
         assertEquals(network2.SSID, hiddenNetworks.get(1).ssid);
         assertEquals(network1.SSID, hiddenNetworks.get(2).ssid);
+
+        hiddenNetworks = mWifiConfigManager.retrieveHiddenNetworkList(true);
+        assertEquals(2, hiddenNetworks.size());
+        assertEquals(network2.SSID, hiddenNetworks.get(0).ssid);
+        assertEquals(network1.SSID, hiddenNetworks.get(1).ssid);
     }
 
     /**

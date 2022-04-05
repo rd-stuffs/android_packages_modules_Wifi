@@ -90,7 +90,7 @@ public class BaseWifiService extends IWifiManager.Stub {
     }
 
     @Override
-    public void setScreenOnScanSchedule(int[] scanSchedule, int[] scanType) {
+    public void setScreenOnScanSchedule(int[] scanScheduleSeconds, int[] scanType) {
         throw new UnsupportedOperationException();
     }
 
@@ -191,6 +191,11 @@ public class BaseWifiService extends IWifiManager.Stub {
 
     @Override
     public void allowAutojoinGlobal(boolean choice) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void queryAutojoinGlobal(@NonNull IBooleanListener listener) {
         throw new UnsupportedOperationException();
     }
 
@@ -754,6 +759,11 @@ public class BaseWifiService extends IWifiManager.Stub {
     }
 
     @Override
+    public void getLastCallerInfoForApi(int apiType, @NonNull ILastCallerListener listener) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public boolean setWifiConnectedNetworkScorer(IBinder binder,
             IWifiConnectedNetworkScorer scorer) {
         throw new UnsupportedOperationException();
@@ -883,7 +893,17 @@ public class BaseWifiService extends IWifiManager.Stub {
     }
 
     @Override
-    public void validateCurrentWifiMeetsAdminRequirements() {
+    public void notifyMinimumRequiredWifiSecurityLevelChanged(int level) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void notifyWifiSsidPolicyChanged(int policyType, @NonNull List<WifiSsid> ssids) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public String[] getOemPrivilegedWifiAdminPackages() {
         throw new UnsupportedOperationException();
     }
 
@@ -894,12 +914,23 @@ public class BaseWifiService extends IWifiManager.Stub {
     }
 
     @Override
+    public void replyToSimpleDialog(int dialogId, int button) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public void addCustomDhcpOptions(WifiSsid ssid, byte[] oui, @NonNull List<DhcpOption> options) {
         throw new UnsupportedOperationException();
     }
 
     @Override
     public void removeCustomDhcpOptions(WifiSsid ssid, byte[] oui) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void reportCreateInterfaceImpact(String packageName, int interfaceType,
+            boolean requireNewInterface, IInterfaceCreationInfoCallback callback) {
         throw new UnsupportedOperationException();
     }
 }

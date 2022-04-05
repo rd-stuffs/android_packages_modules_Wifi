@@ -17,6 +17,7 @@
 package com.android.server.wifi;
 
 import android.annotation.NonNull;
+import android.compat.Compatibility;
 import android.content.Context;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
@@ -281,8 +282,13 @@ public class WifiApConfigStore {
 
         if (mContext.getResources().getBoolean(
                 R.bool.config_wifiSoftapResetAutoShutdownTimerConfig)
-                && config.getShutdownTimeoutMillis() != 0) {
-            configBuilder.setShutdownTimeoutMillis(0);
+                && config.getShutdownTimeoutMillis() > 0) {
+            if (Compatibility.isChangeEnabled(
+                    SoftApConfiguration.REMOVE_ZERO_FOR_TIMEOUT_SETTING)) {
+                configBuilder.setShutdownTimeoutMillis(SoftApConfiguration.DEFAULT_TIMEOUT);
+            } else {
+                configBuilder.setShutdownTimeoutMillis(0);
+            }
             Log.i(TAG, "Reset SAP auto shutdown configuration");
         }
 
@@ -558,12 +564,11 @@ public class WifiApConfigStore {
                     Log.d(TAG, "passphrase not ASCII encodable");
                     return false;
                 }
-            }
-
-            if (authType != SoftApConfiguration.SECURITY_TYPE_WPA3_SAE
-                    && !validateApConfigPreSharedKey(preSharedKey)) {
-                // failed preSharedKey checks for WPA2 and WPA3 SAE Transition mode.
-                return false;
+                if (authType != SoftApConfiguration.SECURITY_TYPE_WPA3_SAE
+                        && !validateApConfigPreSharedKey(preSharedKey)) {
+                    // failed preSharedKey checks for WPA2 and WPA3 SAE Transition mode.
+                    return false;
+                }
             }
         } else {
             // this is not a supported security type
