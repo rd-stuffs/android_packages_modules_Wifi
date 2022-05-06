@@ -45,7 +45,6 @@ import android.util.Pair;
 import android.util.SparseIntArray;
 
 import com.android.modules.utils.build.SdkLevel;
-import com.android.server.wifi.WifiConfigurationUtil;
 
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
@@ -946,7 +945,6 @@ public class XmlUtil {
                 configuration.macRandomizationSetting = WifiConfiguration.RANDOMIZATION_AUTO;
             }
             configuration.convertLegacyFieldsToSecurityParamsIfNeeded();
-            WifiConfigurationUtil.addUpgradableSecurityTypeIfNecessary(configuration);
             return Pair.create(configKeyInData, configuration);
         }
     }
@@ -1688,6 +1686,8 @@ public class XmlUtil {
                 "BridgedModeOpportunisticShutdownTimeoutMillis";
         public static final String XML_TAG_VENDOR_ELEMENT = "VendorElement";
         public static final String XML_TAG_VENDOR_ELEMENTS = "VendorElements";
+        public static final String XML_TAG_PERSISTENT_RANDOMIZED_MAC_ADDRESS =
+                "PersistentRandomizedMacAddress";
 
 
         /**
@@ -1903,6 +1903,10 @@ public class XmlUtil {
                 XmlUtil.writeNextSectionEnd(out, XML_TAG_VENDOR_ELEMENTS);
                 XmlUtil.writeNextValue(out, XML_TAG_80211_BE_ENABLED,
                         softApConfig.isIeee80211beEnabled());
+                if (softApConfig.getPersistentRandomizedMacAddress() != null) {
+                    XmlUtil.writeNextValue(out, XML_TAG_PERSISTENT_RANDOMIZED_MAC_ADDRESS,
+                            softApConfig.getPersistentRandomizedMacAddress().toString());
+                }
             }
         } // End of writeSoftApConfigurationToXml
 
@@ -2043,6 +2047,12 @@ public class XmlUtil {
                                     softApConfigBuilder
                                             .setBridgedModeOpportunisticShutdownTimeoutMillis(
                                                     bridgedTimeout);
+                                }
+                                break;
+                            case XML_TAG_PERSISTENT_RANDOMIZED_MAC_ADDRESS:
+                                if (SdkLevel.isAtLeastT()) {
+                                    softApConfigBuilder.setRandomizedMacAddress(
+                                            MacAddress.fromString((String) value));
                                 }
                                 break;
                             default:

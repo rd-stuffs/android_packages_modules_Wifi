@@ -3407,11 +3407,20 @@ public class WifiVendorHal {
     }
 
     /**
+     * Returns whether the given HdmIfaceTypeForCreation combo is supported or not.
+     */
+    public boolean canDeviceSupportCreateTypeCombo(SparseArray<Integer> combo) {
+        synchronized (sLock) {
+            return mHalDeviceManager.canDeviceSupportCreateTypeCombo(combo);
+        }
+    }
+
+    /**
      * Returns whether STA + AP concurrency is supported or not.
      */
     public boolean isStaApConcurrencySupported() {
         synchronized (sLock) {
-            return mHalDeviceManager.canSupportCreateTypeCombo(new SparseArray<Integer>() {{
+            return mHalDeviceManager.canDeviceSupportCreateTypeCombo(new SparseArray<Integer>() {{
                     put(HDM_CREATE_IFACE_STA, 1);
                     put(HDM_CREATE_IFACE_AP, 1);
                 }});
@@ -3423,7 +3432,7 @@ public class WifiVendorHal {
      */
     public boolean isStaStaConcurrencySupported() {
         synchronized (sLock) {
-            return mHalDeviceManager.canSupportCreateTypeCombo(new SparseArray<Integer>() {{
+            return mHalDeviceManager.canDeviceSupportCreateTypeCombo(new SparseArray<Integer>() {{
                     put(HDM_CREATE_IFACE_STA, 2);
                 }});
         }
