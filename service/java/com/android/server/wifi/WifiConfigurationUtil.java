@@ -62,8 +62,7 @@ public class WifiConfigurationUtil {
      */
     private static final int ENCLOSING_QUOTES_LEN = 2;
     private static final int SSID_UTF_8_MIN_LEN = 1 + ENCLOSING_QUOTES_LEN;
-    private static final int SSID_UTF_8_MAX_LEN = // wifigbk++
-                        WifiGbk.MAX_SSID_UTF_LENGTH + ENCLOSING_QUOTES_LEN;
+    private static final int SSID_UTF_8_MAX_LEN = 32 + ENCLOSING_QUOTES_LEN;
     private static final int SSID_HEX_MIN_LEN = 2;
     private static final int SSID_HEX_MAX_LEN = 64;
     private static final int PSK_ASCII_MIN_LEN = 8 + ENCLOSING_QUOTES_LEN;
@@ -268,8 +267,11 @@ public class WifiConfigurationUtil {
                 return true;
             }
             if (existingEnterpriseConfig.isAuthenticationSimBased()) {
-                // No other credential changes for SIM based methods.
-                // The SIM card is the credential.
+                // The anonymous identity will be decorated with 3gpp realm in the service.
+                if (!TextUtils.equals(existingEnterpriseConfig.getAnonymousIdentity(),
+                        newEnterpriseConfig.getAnonymousIdentity())) {
+                    return true;
+                }
                 return false;
             }
             if (existingEnterpriseConfig.getPhase2Method()
