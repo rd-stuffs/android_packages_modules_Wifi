@@ -6253,6 +6253,64 @@ public class WifiServiceImplTest extends WifiBaseTest {
     }
 
     /**
+     * Verify that add or update networks is not allowed for camera app when
+     * DISALLOW_CONFIG_WIFI user restriction is set.
+     */
+    @Test
+    public void testAddOrUpdateNetworkIsNotAllowedForCameraDisallowConfigWifi() throws Exception {
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        when(mWifiPermissionsUtil.isSystem(anyString(), anyInt())).thenReturn(true);
+        when(mWifiPermissionsUtil.checkCameraPermission(Binder.getCallingUid())).thenReturn(true);
+        when(mWifiPermissionsUtil.isAdmin(Binder.getCallingUid(), TEST_PACKAGE_NAME))
+                .thenReturn(false);
+        when(mWifiConfigManager.addOrUpdateNetwork(any(),  anyInt(), any(), eq(false))).thenReturn(
+                new NetworkUpdateResult(0));
+        when(mUserManager.hasUserRestrictionForUser(eq(UserManager.DISALLOW_CONFIG_WIFI),
+                any())).thenReturn(true);
+
+        WifiConfiguration config = WifiConfigurationTestUtil.createOpenNetwork();
+        mLooper.startAutoDispatch();
+        assertEquals(-1,
+                mWifiServiceImpl.addOrUpdateNetwork(config, TEST_PACKAGE_NAME, mAttribution));
+        mLooper.stopAutoDispatchAndIgnoreExceptions();
+
+        verifyCheckChangePermission(TEST_PACKAGE_NAME);
+        verify(mWifiConfigManager, never()).addOrUpdateNetwork(any(),  anyInt(), any(), eq(false));
+        verify(mWifiMetrics, never()).incrementNumAddOrUpdateNetworkCalls();
+    }
+
+    /**
+     * Verify that add or update networks is not allowed for camera app when
+     * DISALLOW_ADD_WIFI_CONFIG user restriction is set.
+     */
+    @Test
+    public void testAddOrUpdateNetworkIsNotAllowedForCameraDisallowAddWifiConfig()
+            throws Exception {
+        assumeTrue(SdkLevel.isAtLeastT());
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        when(mWifiPermissionsUtil.isSystem(anyString(), anyInt())).thenReturn(true);
+        when(mWifiPermissionsUtil.checkCameraPermission(Binder.getCallingUid())).thenReturn(true);
+        when(mWifiPermissionsUtil.isAdmin(Binder.getCallingUid(), TEST_PACKAGE_NAME))
+                .thenReturn(false);
+        when(mWifiConfigManager.addOrUpdateNetwork(any(),  anyInt(), any(), eq(false))).thenReturn(
+                new NetworkUpdateResult(0));
+        when(mUserManager.hasUserRestrictionForUser(eq(UserManager.DISALLOW_ADD_WIFI_CONFIG),
+                any())).thenReturn(true);
+
+        WifiConfiguration config = WifiConfigurationTestUtil.createOpenNetwork();
+        mLooper.startAutoDispatch();
+        assertEquals(-1,
+                mWifiServiceImpl.addOrUpdateNetwork(config, TEST_PACKAGE_NAME, mAttribution));
+        mLooper.stopAutoDispatchAndIgnoreExceptions();
+
+        verifyCheckChangePermission(TEST_PACKAGE_NAME);
+        verify(mWifiConfigManager, never()).addOrUpdateNetwork(any(),  anyInt(), any(), eq(false));
+        verify(mWifiMetrics, never()).incrementNumAddOrUpdateNetworkCalls();
+    }
+
+    /**
      * Verify that add or update networks is allowed for settings app.
      */
     @Test
@@ -6562,6 +6620,27 @@ public class WifiServiceImplTest extends WifiBaseTest {
     public void testEnableNetworkNotAllowedForAppsTargetingQ() throws Exception {
         doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
                 .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+
+        mLooper.startAutoDispatch();
+        mWifiServiceImpl.enableNetwork(TEST_NETWORK_ID, true, TEST_PACKAGE_NAME);
+        mLooper.stopAutoDispatchAndIgnoreExceptions();
+
+        verify(mConnectHelper, never()).connectToNetwork(any(), any(), anyInt(), any());
+        verify(mWifiMetrics, never()).incrementNumEnableNetworkCalls();
+    }
+
+    /**
+     * Verify that enableNetwork is not allowed for admin restricted network
+     */
+    @Test
+    public void testEnableNetworkNotAllowedForAdminRestrictedNetwork() throws Exception {
+        assumeTrue(SdkLevel.isAtLeastT());
+        doReturn(AppOpsManager.MODE_ALLOWED).when(mAppOpsManager)
+                .noteOp(AppOpsManager.OPSTR_CHANGE_WIFI_STATE, Process.myUid(), TEST_PACKAGE_NAME);
+        when(mWifiPermissionsUtil.isSystem(TEST_PACKAGE_NAME, Process.myUid())).thenReturn(true);
+        WifiConfiguration config = WifiConfigurationTestUtil.createOpenNetwork();
+        when(mWifiConfigManager.getConfiguredNetwork(TEST_NETWORK_ID)).thenReturn(config);
+        when(mWifiPermissionsUtil.isAdminRestrictedNetwork(config)).thenReturn(true);
 
         mLooper.startAutoDispatch();
         mWifiServiceImpl.enableNetwork(TEST_NETWORK_ID, true, TEST_PACKAGE_NAME);
@@ -9076,9 +9155,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
                 anyInt(), anyInt())).thenReturn(PackageManager.PERMISSION_GRANTED);
 
         // First set flag to not allow
-        when(mResources.getBoolean(
-                R.bool.config_wifiAllowInsecureEnterpriseConfigurationsForSettingsAndSUW))
-                .thenReturn(false);
+        when(mWifiGlobals.isInsecureEnterpriseConfigurationAllowed()).thenReturn(false);
         when(mWifiConfigManager.addOrUpdateNetwork(any(),  anyInt(), any(), eq(false))).thenReturn(
                 new NetworkUpdateResult(0));
 
@@ -9095,9 +9172,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         verify(mWifiConfigManager, never()).addOrUpdateNetwork(any(),  anyInt(), any(), eq(false));
 
         // Set flag to allow
-        when(mResources.getBoolean(
-                R.bool.config_wifiAllowInsecureEnterpriseConfigurationsForSettingsAndSUW))
-                .thenReturn(true);
+        when(mWifiGlobals.isInsecureEnterpriseConfigurationAllowed()).thenReturn(true);
 
         // Verify operation succeeds
         mLooper.startAutoDispatch();
@@ -9117,9 +9192,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
     @Test
     public void testAddInsecureEnterpirseNetworkWithNoNetworkSettingsPerm() throws Exception {
         // First set flag to not allow
-        when(mResources.getBoolean(
-                R.bool.config_wifiAllowInsecureEnterpriseConfigurationsForSettingsAndSUW))
-                .thenReturn(false);
+        when(mWifiGlobals.isInsecureEnterpriseConfigurationAllowed()).thenReturn(false);
 
         // Create an insecure Enterprise network
         WifiConfiguration config = WifiConfigurationTestUtil.createEapNetwork();
@@ -9134,9 +9207,7 @@ public class WifiServiceImplTest extends WifiBaseTest {
         verify(mWifiConfigManager, never()).addOrUpdateNetwork(any(),  anyInt(), any(), eq(false));
 
         // Set flag to allow
-        when(mResources.getBoolean(
-                R.bool.config_wifiAllowInsecureEnterpriseConfigurationsForSettingsAndSUW))
-                .thenReturn(true);
+        when(mWifiGlobals.isInsecureEnterpriseConfigurationAllowed()).thenReturn(true);
 
         // Verify operation still fails
         mLooper.startAutoDispatch();
@@ -9524,8 +9595,8 @@ public class WifiServiceImplTest extends WifiBaseTest {
         mWifiServiceImpl.setExternalPnoScanRequest(mAppBinder, callback, ssids, frequencies,
                 TEST_PACKAGE_NAME, TEST_FEATURE_ID);
         mLooper.dispatchAll();
-        verify(mWifiConnectivityManager).setExternalPnoScanRequest(anyInt(), any(), eq(callback),
-                eq(ssids), eq(frequencies));
+        verify(mWifiConnectivityManager).setExternalPnoScanRequest(anyInt(), any(), any(),
+                eq(callback), eq(ssids), eq(frequencies));
     }
 
     @Test

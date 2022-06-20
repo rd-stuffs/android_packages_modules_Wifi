@@ -980,9 +980,9 @@ public class WifiNative {
         synchronized (mLock) {
             if (mWifiVendorHal.isVendorHalSupported()) {
                 // Hostapd vendor V1_2: bridge iface setup start
-                mVendorBridgeModeActive = ((band & SoftApConfiguration.BAND_6GHZ) == 0
-                                             && type == SoftApConfiguration.SECURITY_TYPE_OWE)
-                                          || (isBridged && mHostapdHal.useVendorHostapdHal());
+                mVendorBridgeModeActive = ((isBridged && mHostapdHal.useVendorHostapdHal())
+                                           || (HostapdHalHidlImp.serviceDeclared()
+                                               && (type == SoftApConfiguration.SECURITY_TYPE_WPA3_OWE_TRANSITION)));
                 Log.i(TAG, "CreateApIface - vendor bridge=" + mVendorBridgeModeActive);
                 if (isVendorBridgeModeActive()) {
                     return createVendorBridgeIface(iface, requestorWs, softApManager, band);
@@ -4482,7 +4482,7 @@ public class WifiNative {
     private boolean addAccessPoint(@NonNull String ifaceName,
           @NonNull SoftApConfiguration config, boolean isMetered, SoftApHalCallback callback) {
         if (isVendorBridgeModeActive()) {
-            if (config != null && config.getSecurityType() == SoftApConfiguration.SECURITY_TYPE_OWE) {
+            if (config != null && config.getSecurityType() == SoftApConfiguration.SECURITY_TYPE_WPA3_OWE_TRANSITION) {
                 Log.d(TAG, "Setup for OWE mode Softap");
                 if (!setupOweSap(config, callback))
                     return false;
@@ -4516,9 +4516,10 @@ public class WifiNative {
                 Log.e(TAG, "Failed to set interface up - " + bridgeInterface);
                 return false;
             }
-        } else if (mHostapdHal.useVendorHostapdHal()
-                   || (config != null && config.getSecurityType()
-                              == SoftApConfiguration.SECURITY_TYPE_OWE)) {
+        } else if (mHostapdHal.useVendorHostapdHal() ||
+                   /* Enable OWE only mode for Vendor Hostapd HIDL V_1.2 */
+                   (HostapdHalHidlImp.serviceDeclared() && config != null &&
+                    config.getSecurityType() == SoftApConfiguration.SECURITY_TYPE_WPA3_OWE)) {
             if (!mHostapdHal.addVendorAccessPoint(ifaceName, config, callback::onFailure)) {
                 Log.e(TAG, "Failed to addVendorAP - " + ifaceName);
                 return false;
@@ -4604,6 +4605,21 @@ public class WifiNative {
     public boolean generateSelfDppConfiguration(@NonNull String ifaceName, @NonNull String ssid,
             byte[] privEcKey) {
         return mSupplicantStaIfaceHal.generateSelfDppConfiguration(ifaceName, ssid, privEcKey);
+    }
+
+    /**
+     * This set anonymous identity to supplicant.
+     *
+     * @param ifaceName Name of the interface.
+     * @param anonymousIdentity the anonymouns identity.
+     * @return true if succeeds, false otherwise.
+     */
+    public boolean setEapAnonymousIdentity(@NonNull String ifaceName, String anonymousIdentity) {
+        if (null == anonymousIdentity) {
+            Log.e(TAG, "Cannot set null anonymous identity.");
+            return false;
+        }
+        return mSupplicantStaIfaceHal.setEapAnonymousIdentity(ifaceName, anonymousIdentity);
     }
 
     /**

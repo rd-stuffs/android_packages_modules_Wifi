@@ -152,8 +152,8 @@ public class WifiPermissionsUtil {
      * @return true if the app does have the permission, false otherwise.
      */
     public boolean checkConfigOverridePermission(int uid) {
-        int permission = mWifiPermissionsWrapper.getOverrideWifiConfigPermission(uid);
-        return permission == PackageManager.PERMISSION_GRANTED;
+        return mWifiPermissionsWrapper.getOverrideWifiConfigPermission(uid)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
     /**
@@ -865,6 +865,15 @@ public class WifiPermissionsUtil {
     }
 
     /**
+     * Returns true if the |uid| holds CAMERA permission.
+     */
+    public boolean checkCameraPermission(int uid) {
+        return mWifiPermissionsWrapper.getUidPermission(
+                android.Manifest.permission.CAMERA, uid)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /**
      * Returns true if the |callingUid|/\callingPackage| holds SYSTEM_ALERT_WINDOW permission.
      */
     public boolean checkSystemAlertWindowPermission(int callingUid, String callingPackage) {
@@ -1190,9 +1199,15 @@ public class WifiPermissionsUtil {
                 WifiPermissionsUtil.retrieveDevicePolicyManagerFromContext(mContext);
         if (devicePolicyManager == null) return false;
 
-        int adminMinimumSecurityLevel =
-                devicePolicyManager.getMinimumRequiredWifiSecurityLevel();
-        WifiSsidPolicy policy = devicePolicyManager.getWifiSsidPolicy();
+        int adminMinimumSecurityLevel = 0;
+        WifiSsidPolicy policy;
+        long ident = Binder.clearCallingIdentity();
+        try {
+            adminMinimumSecurityLevel = devicePolicyManager.getMinimumRequiredWifiSecurityLevel();
+            policy = devicePolicyManager.getWifiSsidPolicy();
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
 
         //check minimum security level restriction
         if (adminMinimumSecurityLevel != 0) {
@@ -1239,6 +1254,14 @@ public class WifiPermissionsUtil {
      * Returns the foreground userId
      */
     public int getCurrentUser() {
-        return mWifiPermissionsWrapper.getCurrentUser();
+        //set the default to undefined user id (UserHandle.USER_NULL)
+        int user = -10000;
+        long ident = Binder.clearCallingIdentity();
+        try {
+            user = mWifiPermissionsWrapper.getCurrentUser();
+        } finally {
+            Binder.restoreCallingIdentity(ident);
+        }
+        return user;
     }
 }

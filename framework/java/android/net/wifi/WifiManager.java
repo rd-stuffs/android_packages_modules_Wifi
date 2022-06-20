@@ -2278,21 +2278,6 @@ public class WifiManager {
     }
 
     /**
-    * Get SoftAp Wi-Fi generation.
-    *
-    * @return Wi-Fi generation if SoftAp enabled or -1.
-    *
-    * @hide no intent to publish
-    */
-    public int getSoftApWifiStandard() {
-        try {
-            return mService.getSoftApWifiStandard();
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
-    }
-
-    /**
      * Internal method for doing the RPC that creates a new network description
      * or updates an existing one.
      *
@@ -8725,7 +8710,9 @@ public class WifiManager {
      * the requested SSIDs will get included for PNO scans the next time the screen turns off.
      * <p>
      * Note, due to PNO being a limited resource, only one external PNO request is supported, and
-     * calling this API will fail if an external PNO scan request is already registered.
+     * calling this API will fail if an external PNO scan request is already registered by another
+     * caller. If the caller that has already registered a callback calls this API again, the new
+     * callback will override the previous one.
      * <p>
      * After this API is called, {@link PnoScanResultsCallback#onRegisterSuccess()} will be invoked
      * if the operation is successful, or {@link PnoScanResultsCallback#onRegisterFailed(int)} will
@@ -9136,21 +9123,6 @@ public class WifiManager {
     public void setEmergencyScanRequestInProgress(boolean inProgress) {
         try {
             mService.setEmergencyScanRequestInProgress(inProgress);
-        } catch (RemoteException e) {
-            throw e.rethrowFromSystemServer();
-        }
-    }
-
-     /**
-      * Get device VHT 8SS capability info.
-      *
-      * @return true if device supports VHT 8SS or false.
-      *
-      * @hide no intent to publish
-      */
-    public boolean isVht8ssCapableDevice() {
-        try {
-            return mService.isVht8ssCapableDevice();
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }

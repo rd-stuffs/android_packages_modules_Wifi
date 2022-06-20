@@ -529,7 +529,9 @@ public class WifiServiceImpl extends BaseWifiService {
             if (!mWifiConfigManager.loadFromStore()) {
                 Log.e(TAG, "Failed to load from config store");
             }
-            mWifiConfigManager.updateTrustOnFirstUseFlag(isTrustOnFirstUseSupported());
+            if (!mWifiGlobals.isInsecureEnterpriseConfigurationAllowed()) {
+                mWifiConfigManager.updateTrustOnFirstUseFlag(isTrustOnFirstUseSupported());
+            }
             mWifiConfigManager.incrementNumRebootsSinceLastUse();
             // config store is read, check if verbose logging is enabled.
             enableVerboseLoggingInternal(
@@ -1216,8 +1218,8 @@ public class WifiServiceImpl extends BaseWifiService {
     @AnyThread
     private void setWifiEnabledInternal(String packageName, boolean enable,
             int callingUid, int callingPid, boolean isPrivileged) {
-        mLog.info("setWifiEnabled package=% uid=% enable=%").c(packageName)
-                .c(callingUid).c(enable).flush();
+        mLog.info("setWifiEnabled package=% uid=% enable=% isPrivileged=%").c(packageName)
+                .c(callingUid).c(enable).c(isPrivileged).flush();
         long ident = Binder.clearCallingIdentity();
         try {
             if (!mSettingsStore.handleWifiToggled(enable)) {
@@ -1489,6 +1491,35 @@ public class WifiServiceImpl extends BaseWifiService {
         mWifiThreadRunner.post(() -> mCoexManager.unregisterRemoteCoexCallback(callback));
     }
 
+    private Runnable mRecoverSoftApStateIfNeeded = new Runnable() {
+        @Override
+        public void run() {
+            mTetheredSoftApTracker.setFailedWhileEnabling();
+        }
+    };
+
+    private boolean checkSetEnablingIfAllowed() {
+        Boolean resultSetEnablingIfAllowed = mWifiThreadRunner.call(() -> {
+            if (mWifiThreadRunner.hasCallbacks(mRecoverSoftApStateIfNeeded)) {
+                Log.i(TAG, "An error happened, state is recovering, reject more requests");
+                return false;
+            }
+            return mTetheredSoftApTracker.setEnablingIfAllowed();
+        }, null);
+
+        if (resultSetEnablingIfAllowed == null) {
+            Log.i(TAG, "Timeout happened ! Recover SAP state if needed");
+            mWifiThreadRunner.removeCallbacks(mRecoverSoftApStateIfNeeded);
+            mWifiThreadRunner.post(mRecoverSoftApStateIfNeeded);
+            return false;
+        }
+
+        if (!resultSetEnablingIfAllowed) {
+            mLog.err("Tethering is already active or in recovering.").flush();
+        }
+        return resultSetEnablingIfAllowed;
+    }
+
     /**
      * see {@link android.net.wifi.WifiManager#startSoftAp(WifiConfiguration)}
      * @param wifiConfig SSID, security and channel details as part of WifiConfiguration
@@ -1512,8 +1543,8 @@ public class WifiServiceImpl extends BaseWifiService {
             }
         }
 
-        if (!mTetheredSoftApTracker.setEnablingIfAllowed()) {
-            mLog.err("Tethering is already active.").flush();
+        // TODO: b/233363886, handle timeout in general way.
+        if (!checkSetEnablingIfAllowed()) {
             return false;
         }
 
@@ -1557,9 +1588,8 @@ public class WifiServiceImpl extends BaseWifiService {
 
         mLog.info("startTetheredHotspot uid=%").c(callingUid).flush();
 
-        if (!mWifiThreadRunner.call(
-                () -> mTetheredSoftApTracker.setEnablingIfAllowed(), false)) {
-            mLog.err("Tethering is already active.").flush();
+        // TODO: b/233363886, handle timeout in general way.
+        if (!checkSetEnablingIfAllowed()) {
             return false;
         }
 
@@ -3210,7 +3240,7 @@ public class WifiServiceImpl extends BaseWifiService {
             hasPermission = mWifiPermissionsUtil.checkManageWifiNetworkSelectionPermission(uid);
         }
         if (!hasPermission) {
-            throw new SecurityException(TAG + ": Permission denied");
+            throw new SecurityException(TAG + "Uid " + uid + ": Permission denied");
         }
         if (isVerboseLoggingEnabled()) {
             mLog.info("setSsidsAllowlist uid=%").c(uid).flush();
@@ -3233,7 +3263,7 @@ public class WifiServiceImpl extends BaseWifiService {
             hasPermission = mWifiPermissionsUtil.checkManageWifiNetworkSelectionPermission(uid);
         }
         if (!hasPermission) {
-            throw new SecurityException(TAG + ": Permission denied");
+            throw new SecurityException(TAG + " Uid " + uid + ": Permission denied");
         }
         if (isVerboseLoggingEnabled()) {
             mLog.info("getSsidsAllowlist uid=%").c(uid).flush();
@@ -3428,24 +3458,42 @@ public class WifiServiceImpl extends BaseWifiService {
         if (enforceChangePermission(packageName) != MODE_ALLOWED) {
             return -1;
         }
+
         int callingUid = Binder.getCallingUid();
         int callingPid = Binder.getCallingPid();
         mWifiPermissionsUtil.checkPackage(callingUid, packageName);
+        boolean isAdmin = mWifiPermissionsUtil.isAdmin(callingUid, packageName);
+        boolean isCamera = mWifiPermissionsUtil.checkCameraPermission(callingUid);
+        boolean isSystem = mWifiPermissionsUtil.isSystem(packageName, callingUid);
+        boolean isPrivileged = isPrivileged(callingPid, callingUid);
+
         if (!isTargetSdkLessThanQOrPrivileged(packageName, callingPid, callingUid)) {
             mLog.info("addOrUpdateNetwork not allowed for uid=%").c(callingUid).flush();
             return -1;
         }
-        if (SdkLevel.isAtLeastT() && mUserManager.hasUserRestrictionForUser(
-                UserManager.DISALLOW_ADD_WIFI_CONFIG, UserHandle.getUserHandleForUid(callingUid))
-                && mWifiPermissionsUtil.isTargetSdkLessThan(
-                        packageName, Build.VERSION_CODES.Q, callingUid)
-                && !(isPrivileged(callingPid, callingUid)
-                        || mWifiPermissionsUtil.isAdmin(callingUid, packageName)
-                        || mWifiPermissionsUtil.isSystem(packageName, callingUid))) {
-            mLog.info("addOrUpdateNetwork not allowed for normal apps targeting SDK less "
-                    + "than Q when the DISALLOW_ADD_WIFI_CONFIG user restriction is set").flush();
+        if (mUserManager.hasUserRestrictionForUser(UserManager.DISALLOW_CONFIG_WIFI,
+                UserHandle.of(mWifiPermissionsUtil.getCurrentUser()))
+                && isCamera && !isAdmin) {
+            mLog.info("addOrUpdateNetwork not allowed for the camera apps and therefore the user "
+                    + "when DISALLOW_CONFIG_WIFI user restriction is set").flush();
             return -1;
         }
+        if (SdkLevel.isAtLeastT() && mUserManager.hasUserRestrictionForUser(
+                UserManager.DISALLOW_ADD_WIFI_CONFIG, UserHandle.getUserHandleForUid(callingUid))) {
+            if (mWifiPermissionsUtil.isTargetSdkLessThan(
+                    packageName, Build.VERSION_CODES.Q, callingUid)
+                    && !(isPrivileged || isAdmin || isSystem)) {
+                mLog.info("addOrUpdateNetwork not allowed for normal apps targeting SDK less than "
+                        + "Q when the DISALLOW_ADD_WIFI_CONFIG user restriction is set").flush();
+                return -1;
+            }
+            if (isCamera && !isAdmin) {
+                mLog.info("addOrUpdateNetwork not allowed for camera apps and therefore the user "
+                        + "when the DISALLOW_ADD_WIFI_CONFIG user restriction is set").flush();
+                return -1;
+            }
+        }
+
         mLog.info("addOrUpdateNetwork uid=%").c(callingUid).flush();
         return addOrUpdateNetworkInternal(config, packageName, uidToUse,
                 packageNameToUse, overrideCreator).networkId;
@@ -3494,8 +3542,7 @@ public class WifiServiceImpl extends BaseWifiService {
 
         if (config.isEnterprise() && config.enterpriseConfig.isEapMethodServerCertUsed()
                 && !config.enterpriseConfig.isMandatoryParameterSetForServerCertValidation()) {
-            if (!(mContext.getResources().getBoolean(
-                    R.bool.config_wifiAllowInsecureEnterpriseConfigurationsForSettingsAndSUW)
+            if (!(mWifiGlobals.isInsecureEnterpriseConfigurationAllowed()
                     && isSettingsOrSuw(Binder.getCallingPid(), Binder.getCallingUid()))) {
                 Log.e(TAG, "Enterprise network configuration is missing either a Root CA "
                         + "or a domain name");
@@ -3633,6 +3680,12 @@ public class WifiServiceImpl extends BaseWifiService {
         if (!isTargetSdkLessThanQOrPrivileged(
                 packageName, Binder.getCallingPid(), callingUid)) {
             mLog.info("enableNetwork not allowed for uid=%").c(callingUid).flush();
+            return false;
+        }
+        WifiConfiguration configuration = mWifiConfigManager.getConfiguredNetwork(netId);
+        if (mWifiPermissionsUtil.isAdminRestrictedNetwork(configuration)) {
+            mLog.info("enableNetwork not allowed for admin restricted network Id=%")
+                    .c(netId).flush();
             return false;
         }
 
@@ -6106,7 +6159,7 @@ public class WifiServiceImpl extends BaseWifiService {
         if (!mWifiPermissionsUtil.checkRequestCompanionProfileAutomotiveProjectionPermission(uid)
                 || !mWifiPermissionsUtil.checkCallersLocationPermission(packageName, featureId,
                 uid, false, null)) {
-            throw new SecurityException("Caller has no permission");
+            throw new SecurityException(TAG + " Caller uid " + uid + " has no permission");
         }
         if (isVerboseLoggingEnabled()) {
             mLog.info("setExternalPnoScanRequest uid=%").c(uid).flush();
@@ -6117,8 +6170,8 @@ public class WifiServiceImpl extends BaseWifiService {
                     callback.onRegisterFailed(REGISTER_PNO_CALLBACK_PNO_NOT_SUPPORTED);
                     return;
                 }
-                mWifiConnectivityManager.setExternalPnoScanRequest(uid, binder, callback, ssids,
-                        frequencies);
+                mWifiConnectivityManager.setExternalPnoScanRequest(
+                        uid, packageName, binder, callback, ssids, frequencies);
             } catch (RemoteException e) {
                 Log.e(TAG, e.getMessage());
             }
@@ -6157,7 +6210,7 @@ public class WifiServiceImpl extends BaseWifiService {
         if (!mWifiPermissionsUtil.checkNetworkSettingsPermission(uid)
                 && !mWifiPermissionsUtil.checkNetworkStackPermission(uid)
                 && !mWifiPermissionsUtil.checkMainlineNetworkStackPermission(uid)) {
-            throw new SecurityException("Caller has no permission");
+            throw new SecurityException("Caller uid " + uid + " has no permission");
         }
 
         if (isVerboseLoggingEnabled()) {
@@ -6268,24 +6321,6 @@ public class WifiServiceImpl extends BaseWifiService {
             mLog.info("isAutoWakeupEnabled uid=%").c(Binder.getCallingUid()).flush();
         }
         return mWifiThreadRunner.call(()-> mWifiInjector.getWakeupController().isEnabled(), false);
-    }
-
-    /*
-     * Gets SoftAP Wi-Fi Standard
-     * @return Wi-Fi standard if SoftAp enabled or -1.
-     */
-    @Override
-    public int getSoftApWifiStandard() {
-        return -1;
-    }
-
-    /*
-     * Check if the driver supports 11ax ready
-     * @return {true} if supported, {false} otherwise.
-     */
-    @Override
-    public boolean isVht8ssCapableDevice() {
-        return false;
     }
 
     /**
@@ -6891,7 +6926,8 @@ public class WifiServiceImpl extends BaseWifiService {
         enforceAccessPermission();
         int callingUid = getMockableCallingUid();
         if (!mWifiPermissionsUtil.checkManageWifiInterfacesPermission(callingUid)) {
-            throw new SecurityException("Missing MANAGE_WIFI_INTERFACES permission");
+            throw new SecurityException(
+                    TAG + " Uid " + callingUid + " Missing MANAGE_WIFI_INTERFACES permission");
         }
         mWifiPermissionsUtil.checkPackage(callingUid, packageName);
         mWifiThreadRunner.post(() -> {
