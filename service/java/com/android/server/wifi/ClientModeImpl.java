@@ -3417,7 +3417,13 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
         }
 
         if (lossInfo.reason == ReachabilityLossReason.ROAM) {
-            final WifiConfiguration config = getConnectedWifiConfigurationInternal();
+            WifiConfiguration config = getConnectedWifiConfigurationInternal();
+            if (config == null) {
+                // special case for IP reachability lost which happens right after linked network
+                // roaming. The linked network roaming reset the mLastNetworkId which results in
+                // the connected configuration to be null.
+                config = getConnectingWifiConfigurationInternal();
+            }
             final NetworkAgentConfig naConfig = getNetworkAgentConfigInternal(config);
             final NetworkCapabilities nc = getCapabilities(
                     getConnectedWifiConfigurationInternal(), getConnectedBssidInternal());
@@ -4918,11 +4924,15 @@ public class ClientModeImpl extends StateMachine implements ClientMode {
                             String decoratedPseudonym = mWifiCarrierInfoManager
                                     .decoratePseudonymWith3GppRealm(config,
                                             anonymousIdentity);
-                            if (decoratedPseudonym != null) {
+                            if (decoratedPseudonym != null
+                                    && !decoratedPseudonym.equals(anonymousIdentity)) {
                                 anonymousIdentity = decoratedPseudonym;
                                 // propagate to the supplicant to avoid using
                                 // the original anonymous identity for firmware
                                 // roaming.
+                                if (mVerboseLoggingEnabled) {
+                                    log("Update decorated pseudonym: " + anonymousIdentity);
+                                }
                                 mWifiNative.setEapAnonymousIdentity(mInterfaceName,
                                         anonymousIdentity);
                             }
