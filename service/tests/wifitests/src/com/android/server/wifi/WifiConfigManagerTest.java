@@ -7683,6 +7683,7 @@ public class WifiConfigManagerTest extends WifiBaseTest {
                 networks, retrievedNetworks);
         // Verify the retrieved SSID is all lowercase.
         assertEquals(retrievedNetworks.get(0).SSID, "abcdef");
+    }
 
     /**
      * Verify that if the caller has NETWORK_SETTINGS permission, and the overlay
